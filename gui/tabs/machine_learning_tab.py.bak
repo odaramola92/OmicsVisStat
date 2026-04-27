@@ -1,0 +1,839 @@
+"""
+Machine Learning Tab - ML-based analysis for metabolomics data
+
+This tab provides machine learning capabilities including:
+- Classification models for group prediction
+- Dimensionality reduction (PCA, LDA)
+- Feature importance and selection
+- Model validation and performance metrics
+
+Author: Metabolomics Statistics Tool
+Date: 2025
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog, scrolledtext
+import pandas as pd
+import numpy as np
+import threading
+import json
+import os
+import time
+import logging
+from typing import Dict, Any, Optional
+
+# Import shared components
+from gui.shared.base_tab import BaseTab
+from gui.shared.utils import resolve_runtime_config_path
+
+logger = logging.getLogger(__name__)
+
+
+class MachineLearningTab(BaseTab):
+    """
+    Machine Learning Tab for classification and dimensionality reduction.
+    
+    This tab allows users to:
+    1. Load data from Statistics tab or file
+    2. Select ML analysis type (classification, PCA, feature selection)
+    3. Configure model parameters
+    4. Run analysis with cross-validation
+    5. View and export results
+    """
+    
+    def __init__(self, parent, data_manager):
+        """Initialize Machine Learning tab"""
+        super().__init__(parent, data_manager)
+        
+        # Get root window for dialogs
+        self.root = parent.winfo_toplevel()
+        
+        # Initialize variables
+        self.current_data = None
+        self.current_groups = None
+        self.feature_columns = None
+        self.ml_results = None
+        
+        # Setup UI
+        self.setup_ui()
+        logger.info("Machine Learning tab initialized")
+    
+    def setup_ui(self):
+        """Create the Machine Learning tab interface"""
+        # Main container with horizontal paned window (left config, right results)
+        main_paned = ttk.PanedWindow(self.frame, orient=tk.HORIZONTAL)
+        main_paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Left panel: Configuration (with scroll)
+        left_frame = ttk.Frame(main_paned)
+        main_paned.add(left_frame, weight=1)
+        
+        # Add scrollbar to left panel
+        left_canvas = tk.Canvas(left_frame, bg='#f0f0f0')
+        left_scrollbar = ttk.Scrollbar(left_frame, orient="vertical", command=left_canvas.yview)
+        left_scrollable = ttk.Frame(left_canvas)
+        
+        left_scrollable.bind(
+            "<Configure>",
+            lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all"))
+        )
+        
+        left_canvas.create_window((0, 0), window=left_scrollable, anchor="nw")
+        left_canvas.configure(yscrollcommand=left_scrollbar.set)
+        
+        left_canvas.pack(side="left", fill="both", expand=True)
+        left_scrollbar.pack(side="right", fill="y")
+        
+        # Right panel: Results display
+        right_frame = ttk.Frame(main_paned)
+        main_paned.add(right_frame, weight=2)
+        
+        # Create configuration sections in left panel
+        self._create_data_section(left_scrollable)
+        self._create_analysis_type_section(left_scrollable)
+        self._create_model_section(left_scrollable)
+        self._create_parameters_section(left_scrollable)
+        self._create_action_section(left_scrollable)
+        
+        # Create results display in right panel
+        self._create_results_section(right_frame)
+        
+        # Load saved configuration
+        self._load_ml_config()
+        
+        logger.info("Machine Learning tab UI created")
+    
+    def _create_data_section(self, parent):
+        """Create data loading section"""
+        frame = ttk.LabelFrame(parent, text="📁 Data Loading", padding=10)
+        frame.pack(fill="x", padx=10, pady=5)
+        
+        # Load from file button (primary method)
+        ttk.Button(
+            frame,
+            text="📂 Load Data File",
+            command=self._load_from_file,
+            width=30
+        ).pack(pady=5)
+        
+        # Assign groups button
+        self.assign_groups_btn = ttk.Button(
+            frame,
+            text="👥 Assign Sample Groups",
+            command=self._assign_groups,
+            width=30,
+            state="disabled"
+        )
+        self.assign_groups_btn.pack(pady=5)
+        
+        # Separator
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=10)
+        
+        # Optional: Load from Statistics tab button
+        ttk.Label(
+            frame,
+            text="Or load from Statistics tab:",
+            font=("Arial", 8, "italic")
+        ).pack(pady=(0, 5))
+        
+        ttk.Button(
+            frame, 
+            text="📊 Import from Statistics Tab",
+            command=self._load_from_statistics_tab,
+            width=30
+        ).pack(pady=5)
+        
+        # Status label
+        self.data_status_label = ttk.Label(
+            frame, 
+            text="⚠️ No data loaded",
+            foreground="red"
+        )
+        self.data_status_label.pack(pady=5)
+    
+    def _create_analysis_type_section(self, parent):
+        """Create analysis type selection"""
+        frame = ttk.LabelFrame(parent, text="🎯 Analysis Type", padding=10)
+        frame.pack(fill="x", padx=10, pady=5)
+        
+        self.analysis_type_var = tk.StringVar(value="classification")
+        
+        # Classification
+        ttk.Radiobutton(
+            frame, 
+            text="🎯 Classification (Predict Groups)",
+            variable=self.analysis_type_var,
+            value="classification",
+            command=self._on_analysis_type_change
+        ).pack(anchor="w", pady=2)
+        
+        # PCA
+        ttk.Radiobutton(
+            frame,
+            text="📊 PCA (Principal Component Analysis)",
+            variable=self.analysis_type_var,
+            value="pca",
+            command=self._on_analysis_type_change
+        ).pack(anchor="w", pady=2)
+        
+        # LDA
+        ttk.Radiobutton(
+            frame,
+            text="📈 LDA (Linear Discriminant Analysis)",
+            variable=self.analysis_type_var,
+            value="lda",
+            command=self._on_analysis_type_change
+        ).pack(anchor="w", pady=2)
+        
+        # Feature importance
+        ttk.Radiobutton(
+            frame,
+            text="⭐ Feature Importance Analysis",
+            variable=self.analysis_type_var,
+            value="feature_importance",
+            command=self._on_analysis_type_change
+        ).pack(anchor="w", pady=2)
+    
+    def _create_model_section(self, parent):
+        """Create model selection section"""
+        self.model_frame = ttk.LabelFrame(parent, text="🤖 Model Selection", padding=10)
+        self.model_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.model_var = tk.StringVar(value="Random Forest")
+        
+        models = [
+            ("Random Forest", "Ensemble of decision trees (robust, handles non-linearity)"),
+            ("Gradient Boosting", "Boosted decision trees (high accuracy)"),
+            ("SVM (RBF)", "Support Vector Machine with RBF kernel (good for complex boundaries)"),
+            ("Logistic Regression", "Linear model (interpretable, fast)"),
+            ("Linear Discriminant Analysis", "Linear classifier (works well with few samples)")
+        ]
+        
+        for model_name, description in models:
+            rb = ttk.Radiobutton(
+                self.model_frame,
+                text=model_name,
+                variable=self.model_var,
+                value=model_name
+            )
+            rb.pack(anchor="w", pady=2)
+            
+            # Add tooltip/description
+            desc_label = ttk.Label(
+                self.model_frame,
+                text=f"   → {description}",
+                font=("Arial", 8),
+                foreground="gray"
+            )
+            desc_label.pack(anchor="w", padx=20)
+    
+    def _create_parameters_section(self, parent):
+        """Create parameter configuration section"""
+        frame = ttk.LabelFrame(parent, text="⚙️ Parameters", padding=10)
+        frame.pack(fill="x", padx=10, pady=5)
+        
+        # Test size
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=5)
+        ttk.Label(row, text="Test Size:", width=20).pack(side="left")
+        self.test_size_var = tk.StringVar(value="0.3")
+        test_size_spin = ttk.Spinbox(
+            row,
+            from_=0.1,
+            to=0.5,
+            increment=0.05,
+            textvariable=self.test_size_var,
+            width=10
+        )
+        test_size_spin.pack(side="left", padx=5)
+        ttk.Label(row, text="(0.1-0.5)", font=("Arial", 8), foreground="gray").pack(side="left")
+        
+        # Cross-validation folds
+        self.cv_frame = ttk.Frame(frame)
+        self.cv_frame.pack(fill="x", pady=5)
+        ttk.Label(self.cv_frame, text="CV Folds:", width=20).pack(side="left")
+        self.cv_folds_var = tk.StringVar(value="5")
+        cv_spin = ttk.Spinbox(
+            self.cv_frame,
+            from_=2,
+            to=10,
+            increment=1,
+            textvariable=self.cv_folds_var,
+            width=10
+        )
+        cv_spin.pack(side="left", padx=5)
+        ttk.Label(self.cv_frame, text="(2-10)", font=("Arial", 8), foreground="gray").pack(side="left")
+        
+        # Feature scaling
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=5)
+        ttk.Label(row, text="Feature Scaling:", width=20).pack(side="left")
+        self.scaling_var = tk.StringVar(value="standard")
+        scaling_combo = ttk.Combobox(
+            row,
+            textvariable=self.scaling_var,
+            values=["standard", "robust", "none"],
+            state="readonly",
+            width=15
+        )
+        scaling_combo.pack(side="left", padx=5)
+        
+        # PCA components
+        self.pca_frame = ttk.Frame(frame)
+        ttk.Label(self.pca_frame, text="Number of PCs:", width=20).pack(side="left")
+        self.n_components_var = tk.StringVar(value="10")
+        pca_spin = ttk.Spinbox(
+            self.pca_frame,
+            from_=2,
+            to=50,
+            increment=1,
+            textvariable=self.n_components_var,
+            width=10
+        )
+        pca_spin.pack(side="left", padx=5)
+        
+        # Random state
+        row = ttk.Frame(frame)
+        row.pack(fill="x", pady=5)
+        ttk.Label(row, text="Random Seed:", width=20).pack(side="left")
+        self.random_state_var = tk.StringVar(value="42")
+        ttk.Entry(row, textvariable=self.random_state_var, width=10).pack(side="left", padx=5)
+    
+    def _create_action_section(self, parent):
+        """Create action buttons"""
+        frame = ttk.Frame(parent, padding=10)
+        frame.pack(fill="x", padx=10, pady=10)
+        
+        # Run Analysis button
+        self.run_button = ttk.Button(
+            frame,
+            text="▶️ Run Analysis",
+            command=self._run_analysis,
+            width=20
+        )
+        self.run_button.pack(side="left", padx=5)
+        
+        # Export button
+        self.export_button = ttk.Button(
+            frame,
+            text="📥 Export Results",
+            command=self._export_results,
+            width=20,
+            state="disabled"
+        )
+        self.export_button.pack(side="left", padx=5)
+        
+        # Save Config button
+        ttk.Button(
+            frame,
+            text="💾 Save Config",
+            command=self._save_ml_config,
+            width=20
+        ).pack(side="left", padx=5)
+    
+    def _create_results_section(self, parent):
+        """Create results display area"""
+        # Title
+        title_frame = ttk.Frame(parent)
+        title_frame.pack(fill="x", padx=5, pady=5)
+        ttk.Label(
+            title_frame,
+            text="📈 Analysis Results",
+            font=("Arial", 12, "bold")
+        ).pack(side="left")
+        
+        # Clear button
+        ttk.Button(
+            title_frame,
+            text="🗑️ Clear",
+            command=self._clear_results,
+            width=10
+        ).pack(side="right")
+        
+        # Results text area with scrollbar
+        self.results_text = scrolledtext.ScrolledText(
+            parent,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+            bg="white",
+            fg="black"
+        )
+        self.results_text.pack(fill="both", expand=True, padx=5, pady=5)
+    
+    def _on_analysis_type_change(self):
+        """Handle analysis type change"""
+        analysis_type = self.analysis_type_var.get()
+        
+        # Show/hide model selection based on analysis type
+        if analysis_type == "classification":
+            self.model_frame.pack(fill="x", padx=10, pady=5)
+            self.cv_frame.pack(fill="x", pady=5)
+            self.pca_frame.pack_forget()
+        elif analysis_type in ["pca", "lda"]:
+            self.model_frame.pack_forget()
+            self.cv_frame.pack_forget()
+            if analysis_type == "pca":
+                self.pca_frame.pack(fill="x", pady=5)
+            else:
+                self.pca_frame.pack_forget()
+        elif analysis_type == "feature_importance":
+            self.model_frame.pack(fill="x", padx=10, pady=5)
+            self.cv_frame.pack_forget()
+            self.pca_frame.pack_forget()
+    
+    def _load_from_statistics_tab(self):
+        """Load data from Statistics tab via shared memory store"""
+        try:
+            # Try to get data from memory store
+            data = self.memory_store.get('metabolite_data')
+            groups = self.memory_store.get('sample_group_assignments')
+            
+            if data is None:
+                messagebox.showwarning(
+                    "No Data",
+                    "Please load data in the Statistics tab first.\n\n"
+                    "Steps:\n"
+                    "1. Go to Statistics tab\n"
+                    "2. Load your metabolomics data\n"
+                    "3. Assign samples to groups\n"
+                    "4. Return to Machine Learning tab"
+                )
+                return
+            
+            if groups is None or len(groups) == 0:
+                messagebox.showwarning(
+                    "No Group Assignments",
+                    "Please assign samples to groups in the Statistics tab first."
+                )
+                return
+            
+            # Store data
+            self.current_data = data.copy()
+            self.current_groups = groups.copy()
+            
+            # Identify feature columns (exclude metadata columns)
+            metadata_cols = ['Feature', 'Metabolite', 'Name', 'Class', 'Lipid_Class', 
+                           'Class_name', 'ID', 'Compound', 'HMDB']
+            self.feature_columns = [col for col in data.columns 
+                                   if col not in metadata_cols and col in groups]
+            
+            # Update status
+            n_features = len(data)
+            n_samples = len(self.feature_columns)
+            n_groups = len(set(groups.values()))
+            
+            self.data_status_label.config(
+                text=f"✅ Loaded: {n_features} features, {n_samples} samples, {n_groups} groups",
+                foreground="green"
+            )
+            
+            self._log_result(f"\n{'='*60}\n")
+            self._log_result(f"✅ Data loaded from Statistics tab\n")
+            self._log_result(f"   • Features: {n_features}\n")
+            self._log_result(f"   • Samples: {n_samples}\n")
+            self._log_result(f"   • Groups: {', '.join(set(groups.values()))}\n")
+            self._log_result(f"{'='*60}\n\n")
+            
+            messagebox.showinfo(
+                "Success",
+                f"Data loaded successfully!\n\n"
+                f"Features: {n_features}\n"
+                f"Samples: {n_samples}\n"
+                f"Groups: {n_groups}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error loading data from Statistics tab: {e}")
+            messagebox.showerror("Error", f"Failed to load data:\n{str(e)}")
+    
+    def _load_from_file(self):
+        """Load data from Excel or CSV file - exactly like Statistics tab"""
+        file_path = filedialog.askopenfilename(
+            title="Select Metabolomics/Omics Data File",
+            filetypes=[
+                ("Excel files", "*.xlsx *.xls"),
+                ("CSV files", "*.csv"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            self._log_result(f"\n{'='*60}\n")
+            self._log_result(f"📂 Loading data file: {os.path.basename(file_path)}\n")
+            self._log_result(f"{'='*60}\n\n")
+            
+            # Load file
+            if file_path.endswith('.csv'):
+                data = pd.read_csv(file_path)
+                self._log_result("✅ Loaded CSV file\n")
+            else:
+                # Try to load Excel - handle multiple sheets
+                xl = pd.ExcelFile(file_path)
+                
+                if len(xl.sheet_names) == 1:
+                    # Single sheet
+                    data = pd.read_excel(file_path, sheet_name=xl.sheet_names[0])
+                    self._log_result(f"✅ Loaded Excel sheet: {xl.sheet_names[0]}\n")
+                else:
+                    # Multiple sheets - let user choose
+                    self._log_result(f"📋 Found {len(xl.sheet_names)} sheets:\n")
+                    for sheet in xl.sheet_names:
+                        self._log_result(f"   • {sheet}\n")
+                    
+                    # Ask user which sheet to use
+                    from tkinter import simpledialog
+                    sheet_name = simpledialog.askstring(
+                        "Select Sheet",
+                        f"Multiple sheets found.\nAvailable sheets:\n" + "\n".join(xl.sheet_names) + 
+                        f"\n\nEnter sheet name to load:",
+                        initialvalue=xl.sheet_names[0]
+                    )
+                    
+                    if not sheet_name or sheet_name not in xl.sheet_names:
+                        self._log_result("❌ Invalid sheet selected. Loading cancelled.\n")
+                        return
+                    
+                    data = pd.read_excel(file_path, sheet_name=sheet_name)
+                    self._log_result(f"✅ Loaded sheet: {sheet_name}\n")
+            
+            # Identify metadata columns and sample columns
+            metadata_cols = ['Feature', 'Metabolite', 'Name', 'Compound', 'ID', 
+                           'Class', 'Lipid_Class', 'Class_name', 'HMDB', 'KEGG']
+            
+            # Find actual metadata columns that exist
+            actual_metadata = [col for col in data.columns if col in metadata_cols]
+            
+            # Sample columns are all numeric columns that are NOT metadata
+            sample_cols = []
+            for col in data.columns:
+                if col not in actual_metadata:
+                    # Check if column has numeric data
+                    if pd.api.types.is_numeric_dtype(data[col]):
+                        sample_cols.append(col)
+            
+            if len(sample_cols) == 0:
+                self._log_result("❌ No sample columns (numeric data) found!\n")
+                messagebox.showerror("Error", "No numeric sample columns found in the file.")
+                return
+            
+            # Store data
+            self.current_data = data
+            self.feature_columns = sample_cols
+            self.current_groups = {}  # Will be assigned next
+            
+            # Log summary
+            n_features = len(data)
+            n_samples = len(sample_cols)
+            
+            self._log_result(f"\n📊 Data Summary:\n")
+            self._log_result(f"   • Features (rows): {n_features}\n")
+            self._log_result(f"   • Samples (columns): {n_samples}\n")
+            self._log_result(f"   • Metadata columns: {', '.join(actual_metadata) if actual_metadata else 'None'}\n")
+            self._log_result(f"   • Sample columns: {', '.join(sample_cols[:5])}")
+            if len(sample_cols) > 5:
+                self._log_result(f" ... +{len(sample_cols)-5} more\n")
+            else:
+                self._log_result("\n")
+            
+            # Update status
+            self.data_status_label.config(
+                text=f"✅ Loaded: {n_features} features, {n_samples} samples (groups not assigned)",
+                foreground="orange"
+            )
+            
+            # Enable group assignment button
+            self.assign_groups_btn.config(state="normal")
+            
+            self._log_result(f"\n{'='*60}\n")
+            self._log_result(f"✅ Data loaded successfully!\n")
+            self._log_result(f"⚠️  Next step: Click '👥 Assign Sample Groups'\n")
+            self._log_result(f"{'='*60}\n\n")
+            
+            messagebox.showinfo(
+                "Data Loaded",
+                f"Data loaded successfully!\n\n"
+                f"Features: {n_features}\n"
+                f"Samples: {n_samples}\n\n"
+                f"Next: Click 'Assign Sample Groups' to assign samples to groups."
+            )
+            
+        except Exception as e:
+            logger.error(f"Error loading file: {e}", exc_info=True)
+            self._log_result(f"\n❌ Error loading file:\n{str(e)}\n")
+            messagebox.showerror("Error", f"Failed to load file:\n{str(e)}")
+    
+    def _run_analysis(self):
+        """Run the selected ML analysis"""
+        # Validation
+        if self.current_data is None or self.current_groups is None:
+            messagebox.showwarning(
+                "No Data",
+                "Please load data first using 'Load from Statistics Tab'."
+            )
+            return
+        
+        # Clear previous results
+        self._clear_results()
+        
+        # Disable run button during analysis
+        self.run_button.config(state="disabled", text="⏳ Running...")
+        
+        # Run in background thread
+        thread = threading.Thread(target=self._run_analysis_thread, daemon=True)
+        thread.start()
+    
+    def _run_analysis_thread(self):
+        """Background thread for ML analysis"""
+        try:
+            from main_script.ml_models import (
+                MetabolomicsMLAnalysis, 
+                format_classification_summary,
+                format_pca_summary
+            )
+            
+            # Get analysis parameters
+            analysis_type = self.analysis_type_var.get()
+            test_size = float(self.test_size_var.get())
+            scaling = self.scaling_var.get()
+            
+            # Log start
+            self._log_result(f"\n{'='*60}\n")
+            self._log_result(f"🚀 Starting {analysis_type.upper()} Analysis...\n")
+            self._log_result(f"{'='*60}\n\n")
+            self._log_result(f"⚙️ Configuration:\n")
+            self._log_result(f"   • Analysis Type: {analysis_type}\n")
+            self._log_result(f"   • Scaling: {scaling}\n")
+            
+            # Initialize ML analysis
+            ml_analysis = MetabolomicsMLAnalysis(
+                data_df=self.current_data,
+                group_assignments=self.current_groups,
+                feature_columns=self.feature_columns
+            )
+            
+            # Run selected analysis
+            if analysis_type == "classification":
+                model_name = self.model_var.get()
+                cv_folds = int(self.cv_folds_var.get())
+                
+                self._log_result(f"   • Model: {model_name}\n")
+                self._log_result(f"   • Test Size: {test_size}\n")
+                self._log_result(f"   • CV Folds: {cv_folds}\n\n")
+                
+                self._log_result("⏳ Training model and performing cross-validation...\n\n")
+                
+                results = ml_analysis.run_classification(
+                    model_name=model_name,
+                    cv_folds=cv_folds,
+                    test_size=test_size,
+                    scaling_method=scaling
+                )
+                
+                self.ml_results = results
+                
+                # Display formatted results
+                summary = format_classification_summary(results)
+                self._log_result(summary)
+                
+            elif analysis_type == "pca":
+                n_components = int(self.n_components_var.get())
+                
+                self._log_result(f"   • Number of Components: {n_components}\n\n")
+                self._log_result("⏳ Computing principal components...\n\n")
+                
+                results = ml_analysis.run_pca(
+                    n_components=n_components,
+                    scaling_method=scaling
+                )
+                
+                self.ml_results = results
+                
+                # Display formatted results
+                summary = format_pca_summary(results)
+                self._log_result(summary)
+                
+            elif analysis_type == "lda":
+                self._log_result("⏳ Computing linear discriminants...\n\n")
+                
+                results = ml_analysis.run_lda(scaling_method=scaling)
+                
+                self.ml_results = results
+                
+                # Display results
+                self._log_result(f"\n✅ LDA Analysis Complete!\n\n")
+                self._log_result(f"📊 Number of Discriminants: {results['n_components']}\n")
+                self._log_result(f"📊 Explained Variance:\n")
+                for i, var in enumerate(results['explained_variance']):
+                    self._log_result(f"   LD{i+1}: {var:.4f} ({var*100:.2f}%)\n")
+                
+            elif analysis_type == "feature_importance":
+                model_name = self.model_var.get()
+                
+                self._log_result(f"   • Model: {model_name}\n")
+                self._log_result(f"   • Test Size: {test_size}\n\n")
+                
+                self._log_result("⏳ Training model and extracting feature importance...\n\n")
+                
+                results = ml_analysis.run_classification(
+                    model_name=model_name,
+                    cv_folds=5,
+                    test_size=test_size,
+                    scaling_method=scaling
+                )
+                
+                self.ml_results = results
+                
+                # Display feature importance
+                if results['feature_importances']:
+                    self._log_result(f"\n⭐ Feature Importance Analysis\n")
+                    self._log_result(f"{'='*60}\n\n")
+                    
+                    top_features = results['feature_importances']['top_features']
+                    self._log_result(f"Top {len(top_features)} Most Important Features:\n\n")
+                    
+                    for rank, (feature, importance) in enumerate(top_features, 1):
+                        bar_length = int(importance * 50)
+                        bar = "█" * bar_length + "░" * (50 - bar_length)
+                        self._log_result(f"{rank:2d}. {feature[:40]:40s} {importance:.6f}\n")
+                        self._log_result(f"    {bar}\n\n")
+                else:
+                    self._log_result("\n⚠️ Feature importance not available for this model.\n")
+            
+            # Success
+            self._log_result(f"\n{'='*60}\n")
+            self._log_result(f"✅ Analysis completed successfully!\n")
+            self._log_result(f"{'='*60}\n")
+            
+            # Enable export button
+            self.root.after(0, lambda: self.export_button.config(state="normal"))
+            
+        except Exception as e:
+            error_msg = f"\n❌ Error during analysis:\n{str(e)}\n\n"
+            logger.error(error_msg, exc_info=True)
+            self._log_result(error_msg)
+            self._log_result("Please check your data and parameters.\n")
+            
+        finally:
+            # Re-enable run button
+            self.root.after(0, lambda: self.run_button.config(state="normal", text="▶️ Run Analysis"))
+    
+    def _log_result(self, message: str):
+        """Thread-safe logging to results text widget"""
+        def append():
+            self.results_text.insert(tk.END, message)
+            self.results_text.see(tk.END)
+            self.results_text.update_idletasks()
+        
+        self.root.after(0, append)
+    
+    def _clear_results(self):
+        """Clear results display"""
+        self.results_text.delete('1.0', tk.END)
+        self.ml_results = None
+        self.export_button.config(state="disabled")
+    
+    def _export_results(self):
+        """Export ML results to Excel file"""
+        if self.ml_results is None:
+            messagebox.showwarning("No Results", "No results to export. Please run an analysis first.")
+            return
+        
+        # Ask for save location
+        file_path = filedialog.asksaveasfilename(
+            title="Save ML Results",
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            from main_script.ml_models import MetabolomicsMLAnalysis
+            
+            # Create a temporary ML object for export
+            ml_analysis = MetabolomicsMLAnalysis(
+                data_df=self.current_data,
+                group_assignments=self.current_groups,
+                feature_columns=self.feature_columns
+            )
+            ml_analysis.results = self.ml_results
+            
+            # Determine results type
+            analysis_type = self.analysis_type_var.get()
+            if analysis_type == "feature_importance":
+                analysis_type = "classification"
+            
+            # Export
+            ml_analysis.export_results_to_excel(file_path, analysis_type)
+            
+            messagebox.showinfo("Success", f"Results exported to:\n{file_path}")
+            
+        except Exception as e:
+            logger.error(f"Error exporting results: {e}")
+            messagebox.showerror("Error", f"Failed to export results:\n{str(e)}")
+    
+    def _save_ml_config(self):
+        """Save current ML configuration to JSON"""
+        try:
+            config = {
+                'analysis_type': self.analysis_type_var.get(),
+                'model': self.model_var.get(),
+                'test_size': self.test_size_var.get(),
+                'cv_folds': self.cv_folds_var.get(),
+                'scaling': self.scaling_var.get(),
+                'n_components': self.n_components_var.get(),
+                'random_state': self.random_state_var.get()
+            }
+            
+            config_file = self._get_config_file()
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            messagebox.showinfo("Success", "Configuration saved successfully!")
+            logger.info(f"ML configuration saved to {config_file}")
+            
+        except Exception as e:
+            logger.error(f"Error saving configuration: {e}")
+            messagebox.showerror("Error", f"Failed to save configuration:\n{str(e)}")
+    
+    def _load_ml_config(self):
+        """Load ML configuration from JSON"""
+        try:
+            config_file = self._get_config_file()
+            
+            if not os.path.exists(config_file):
+                logger.info("No saved ML configuration found")
+                return
+            
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            
+            # Apply configuration
+            self.analysis_type_var.set(config.get('analysis_type', 'classification'))
+            self.model_var.set(config.get('model', 'Random Forest'))
+            self.test_size_var.set(config.get('test_size', '0.3'))
+            self.cv_folds_var.set(config.get('cv_folds', '5'))
+            self.scaling_var.set(config.get('scaling', 'standard'))
+            self.n_components_var.set(config.get('n_components', '10'))
+            self.random_state_var.set(config.get('random_state', '42'))
+            
+            # Trigger UI update
+            self._on_analysis_type_change()
+            
+            logger.info("ML configuration loaded successfully")
+            
+        except Exception as e:
+            logger.warning(f"Could not load ML configuration: {e}")
+    
+    def _get_config_file(self) -> str:
+        """Get path to ML configuration file"""
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            base_dir = os.getcwd()
+        
+        return resolve_runtime_config_path('ml_config.json', {base_dir})

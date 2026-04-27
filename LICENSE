@@ -1,0 +1,69 @@
+MIT License
+
+Copyright (c) 2025 OmicsVisStat Contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+THIRD-PARTY LICENSES
+
+This software uses the following third-party libraries, each with their own licenses:
+
+1. NumPy - BSD 3-Clause License
+2. pandas - BSD 3-Clause License
+3. SciPy - BSD 3-Clause License
+4. Matplotlib - PSF-based License
+5. Seaborn - BSD 3-Clause License
+6. scikit-learn - BSD 3-Clause License
+7. statsmodels - BSD 3-Clause License
+8. Plotly - MIT License
+9. openpyxl - MIT License
+10. xlsxwriter - BSD 2-Clause License
+
+For complete license texts of third-party dependencies, please refer to their
+respective documentation at:
+- https://numpy.org/doc/stable/license.html
+- https://pandas.pydata.org/pandas-docs/stable/getting_started/overview.html#license
+- https://scipy.org/scipylib/license.html
+- https://matplotlib.org/stable/users/project/license.html
+- https://github.com/mwaskom/seaborn/blob/master/LICENSE.md
+- https://scikit-learn.org/stable/about.html#licensing
+- https://www.statsmodels.org/stable/index.html#license
+- https://plotly.com/python/is-plotly-free/
+- https://openpyxl.readthedocs.io/en/stable/#license
+- https://xlsxwriter.readthedocs.io/license.html
+
+---
+
+DISCLAIMER
+
+This software is intended for research purposes only. Users are responsible for
+validating results and ensuring appropriate statistical methods are applied to
+their data. The authors and contributors make no warranties regarding the
+accuracy, completeness, or reliability of the software for any particular purpose.
+
+Users should:
+- Verify statistical assumptions before applying tests
+- Consult with biostatisticians or data scientists for complex analyses
+- Consider biological and experimental context when interpreting results
+- Follow best practices in their respective fields
+
+By using this software, you acknowledge that you have read this disclaimer and
+agree to use the software at your own risk.

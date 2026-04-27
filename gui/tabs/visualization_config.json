@@ -1,0 +1,40 @@
+{
+  "viz_group_definitions": {
+    "Group1": "Control",
+    "Group2": "H_Control",
+    "Group3": "TBI",
+    "Group4": "H_TBI"
+  },
+  "viz_group_mapping": {
+    "LC_HCtl_1": "H_Control",
+    "LC_HTBI_3": "H_TBI",
+    "LC_HCtl_4": "H_Control",
+    "LC_Ctl_4": "Control",
+    "LC_Ctl_2": "Control",
+    "LC_TBI_4": "TBI",
+    "LC_HCtl_5": "H_Control",
+    "LC_HCtl_6": "H_Control",
+    "LC_TBI_5": "TBI",
+    "LC_HTBI_4": "H_TBI",
+    "LC_Ctl_5": "Control",
+    "LC_HCtl_2": "H_Control",
+    "LC_HTBI_5": "H_TBI",
+    "LC_Ctl_6": "Control",
+    "LC_TBI_6": "TBI",
+    "LC_HTBI_6": "H_TBI",
+    "LC_Ctl_3": "Control",
+    "LC_Ctl_1": "Control",
+    "LC_HCtl_3": "H_Control",
+    "LC_TBI_1": "TBI",
+    "LC_TBI_2": "TBI",
+    "LC_TBI_3": "TBI",
+    "LC_HTBI_1": "H_TBI",
+    "LC_HTBI_2": "H_TBI"
+  },
+  "viz_color_map": {
+    "Control": "#1f77b4",
+    "H_Control": "#ff7f0e",
+    "TBI": "#2ca02c",
+    "H_TBI": "#d62728"
+  }
+}

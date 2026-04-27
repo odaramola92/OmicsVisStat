@@ -1,0 +1,190 @@
+{
+  "version": "1.0",
+  "description": "Two-Way ANOVA Factor Configuration Storage",
+  "saved_mappings": {
+    "example_dataset": {
+      "description": "Example: RC groups study",
+      "created": "2025-01-01",
+      "last_modified": "2025-01-01",
+      "factorA": {
+        "name": "Injury Status",
+        "description": "TBI vs Control",
+        "groups": {
+          "RC_Ctl": "CTL",
+          "RC_HCtl": "CTL",
+          "RC_HTBI": "TBI",
+          "RC_TBI": "TBI"
+        }
+      },
+      "factorB": {
+        "name": "Heat Condition",
+        "description": "Heat exposure level",
+        "groups": {
+          "RC_Ctl": "Regular",
+          "RC_HCtl": "High",
+          "RC_HTBI": "High",
+          "RC_TBI": "Regular"
+        }
+      },
+      "design_type": "factorial",
+      "balanced": true,
+      "notes": "2x2 balanced design with 6 replicates per cell"
+    },
+    "TBI": {
+      "description": "",
+      "created": "2025-11-26T10:24:28.025151",
+      "last_modified": "2025-11-26T10:24:28.025151",
+      "factorA": {
+        "name": "Treatment",
+        "groups": {
+          "Control": "No_Treatment",
+          "H_Control": "Treated",
+          "H_TBI": "Treated",
+          "TBI": "No_Treatment"
+        }
+      },
+      "factorB": {
+        "name": "Injury",
+        "groups": {
+          "Control": "Control",
+          "H_Control": "Control",
+          "H_TBI": "TBI",
+          "TBI": "TBI"
+        }
+      },
+      "design_type": "factorial",
+      "balanced": true,
+      "notes": "Auto-saved configuration from 4 groups"
+    },
+    "High_fat": {
+      "description": "",
+      "created": "2025-11-21T10:45:58.136701",
+      "last_modified": "2025-11-21T10:45:58.136701",
+      "factorA": {
+        "name": "Injury",
+        "groups": {
+          "Control": "Control",
+          "HFD": "Control",
+          "HFD_HTBI": "TBI",
+          "TBI": "TBI"
+        }
+      },
+      "factorB": {
+        "name": "Diet",
+        "groups": {
+          "Control": "Regular",
+          "HFD": "Diet",
+          "HFD_HTBI": "Diet",
+          "TBI": "Regular"
+        }
+      },
+      "design_type": "factorial",
+      "balanced": true,
+      "notes": "Auto-saved configuration from 4 groups"
+    },
+    "HFD": {
+      "description": "",
+      "created": "2025-12-15T20:32:10.888544",
+      "last_modified": "2025-12-15T20:32:10.888552",
+      "factorA": {
+        "name": "Injury",
+        "groups": {
+          "LC_Ctl": "Control",
+          "LC_HCtl": "Control",
+          "LC_HTBI": "TBI",
+          "LC_TBI": "TBI"
+        }
+      },
+      "factorB": {
+        "name": "Diet",
+        "groups": {
+          "LC_Ctl": "Regular",
+          "LC_HCtl": "Diet",
+          "LC_HTBI": "Diet",
+          "LC_TBI": "Regular"
+        }
+      },
+      "design_type": "factorial",
+      "balanced": true,
+      "notes": "Auto-saved configuration from 4 groups"
+    },
+    "New": {
+      "description": "",
+      "created": "2025-11-21T16:35:54.107791",
+      "last_modified": "2025-11-21T16:35:54.107791",
+      "factorA": {
+        "name": "Injury",
+        "groups": {
+          "Control": "NoTBI",
+          "HFD": "NoTBI",
+          "HFD_TBI": "TBI",
+          "TBI": "TBI"
+        }
+      },
+      "factorB": {
+        "name": "Diet",
+        "groups": {
+          "Control": "Regular",
+          "HFD": "Diet",
+          "HFD_TBI": "Diet",
+          "TBI": "Regular"
+        }
+      },
+      "design_type": "factorial",
+      "balanced": true,
+      "notes": "Auto-saved configuration from 4 groups"
+    },
+    "Correct": {
+      "description": "",
+      "created": "2025-11-25T13:42:46.806146",
+      "last_modified": "2025-11-25T13:42:46.807145",
+      "factorA": {
+        "name": "Injury",
+        "groups": {
+          "Control": "Control",
+          "HFD": "Control",
+          "HFD_TBI": "TBI",
+          "TBI": "TBI"
+        }
+      },
+      "factorB": {
+        "name": "Diet",
+        "groups": {
+          "Control": "NC",
+          "HFD": "HFD",
+          "HFD_TBI": "HFD",
+          "TBI": "NC"
+        }
+      },
+      "design_type": "factorial",
+      "balanced": true,
+      "notes": "Auto-saved configuration from 4 groups"
+    },
+    "HTBI": {
+      "description": "",
+      "created": "2025-12-15T16:12:42.219682",
+      "last_modified": "2025-12-15T16:12:42.219682",
+      "factorA": {
+        "name": "Treatment",
+        "groups": {
+          "LC_Ctl": "No Treatment",
+          "LC_HCtl": "Treated",
+          "LC_HTBI": "Treated",
+          "LC_TBI": "No Treatment"
+        }
+      },
+      "factorB": {
+        "name": "Injury",
+        "groups": {
+          "LC_Ctl": "No Injury",
+          "LC_HCtl": "No Injury",
+          "LC_HTBI": "Injury",
+          "LC_TBI": "Injury"
+        }
+      },
+      "design_type": "factorial",
+      "balanced": true,
+      "notes": "Auto-saved configuration from 4 groups"
+    }
+  }
+}

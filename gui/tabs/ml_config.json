@@ -1,0 +1,10 @@
+{
+  "analysis_type": "classification",
+  "model": "Random Forest",
+  "test_size": "0.3",
+  "cv_folds": "5",
+  "scaling": "standard",
+  "n_components": "10",
+  "random_state": "42",
+  "notes": "Machine Learning configuration file - stores user preferences for ML analysis parameters"
+}
