@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+type: software
+title: "OmicsVisStat: Statistical and Visualization Platform for Omics Data Analysis"
+version: "1.0.0"
+date-released: 2026-04-27
+
+authors:
+  - family-names: "Daramola"
+    given-names: "Oluwatosin E."
+  - family-names: "Mechref"
+    given-names: "Yehia"
+
+repository-code: "https://github.com/odaramola92/OmicsVisStat"
+license: "MIT"
+
+keywords:
+  - metabolomics
+  - lipidomics
+  - glycomics
+  - proteomics
+  - statistics
+  - machine learning
+  - data visualization
+  - LC-MS
+
+description: >
+  OmicsVisStat is a graphical user interface (GUI) platform for statistical analysis,
+  machine learning, and visualization of omics datasets, including metabolomics,
+  lipidomics, glycomics, and proteomics. It provides workflows for data preprocessing,
+  differential analysis, model building, and publication-ready figure generation.
