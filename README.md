@@ -55,9 +55,11 @@ The current interface includes:
 
 ### Option 1: Standalone Executable (Windows)
 
-1. Download the release ZIP package.
-2. Extract it to your desired location.
-3. Run `OmicsVisStat.exe`.
+1. Go to the project page on GitHub (or the archived version on Zenodo).
+2. Click on “Releases” (right-hand side of the page).
+3. Download the file "OmicsVisStat.zip"
+4. Extract the ZIP file to your desired location.
+5. Double-click OmicsVisStat.exe to launch the application.
 
 ### Option 2: From Source
 
@@ -131,7 +133,12 @@ The full documentation is in the docs folder:
 
 ## Citation
 
-If you use this tool in your research, please cite the project and release metadata in your manuscript or repository record.
+@software{daramola_omicsvisstat_2026,
+  author  = {Daramola, Oluwatosin and Mechref, Yehia},
+  title   = {OmicsVisStat: Statistical and Visualization Platform for Omics Data Analysis},
+  year    = {2026},
+  version = {1.0.0}
+}
 
 ## License
 
