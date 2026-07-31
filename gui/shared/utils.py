@@ -279,6 +279,11 @@ def is_statistics_metadata_col(col_name: str) -> bool:
         lowered = str(col_name)
     if not lowered:
         return False
+    # Generic count-style columns are metadata, not sample measurements.
+    # This keeps derived count fields like n_lipids and n_<group> out of sample detection
+    # without relying on dataset-specific names.
+    if re.match(r'^(n|count|nobs|samplesize)[_\-\s].+', lowered):
+        return True
     if lowered.startswith('stat'):
         return True
     if lowered.startswith('adj') and ('p' in lowered or lowered.startswith('adjp')):

@@ -20,12 +20,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, List, Sequence, Tuple, Optional, Any, Callable
+import logging
 import numpy as np
 import pandas as pd
 from scipy import stats
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 import time
+
+logger = logging.getLogger(__name__)
 
 # Suppress specific warnings from scipy and statsmodels for constant input data
 warnings.filterwarnings('ignore', category=stats.ConstantInputWarning)
@@ -1203,13 +1206,15 @@ def apply_imputation(
     sample_cols: Sequence[str],
     method: str = 'half_min',
     knn_neighbors: int = 5,
+    debug: bool = False,
+    log_fn: Optional[Callable[[str], None]] = None,
 ) -> tuple[pd.DataFrame, Dict[str, Any]]:
     """Impute missing values (NaN/0) in sample columns.
 
     Supported methods: 'half_min', 'median_per_group', 'median_global', and 'knn'.
     """
     out = df.copy()
-    valid_cols = [c for c in sample_cols if c in out.columns]
+    valid_cols = [c for c in sample_cols if c in out.columns and not _is_stat_metadata_col(c)]
     if not valid_cols:
         return out, {
             'applied': False,
@@ -1234,6 +1239,34 @@ def apply_imputation(
             vals = row.dropna().values
             vals = vals[vals > 0]
             half_min = float(np.min(vals) / 2.0) if len(vals) else global_half_min
+            impute_count = int(row.isna().sum())
+            if debug and impute_count > 0:
+                row_label = None
+                for label_col in ('LipidID', 'Class', 'Class_name', 'Lipid_Class', 'Name'):
+                    if label_col in out.columns:
+                        row_label = out.at[idx, label_col]
+                        break
+                # determine the minimum value and which sample column(s) contain it
+                min_val = float(np.min(vals)) if len(vals) else global_half_min * 2.0
+                sample_names = []
+                # Only consider verified/valid sample columns to avoid non-sample cols (e.g., 'n_lipids')
+                for col_name in valid_cols:
+                    try:
+                        col_val = imputed.at[idx, col_name]
+                        if pd.notna(col_val) and float(col_val) > 0 and np.isclose(float(col_val), min_val):
+                            sample_names.append(col_name)
+                    except Exception:
+                        continue
+                sample_display = f"({', '.join(sample_names)})" if sample_names else "(N/A)"
+                debug_message = (
+                    f"half_min row={row_label if row_label is not None else idx}: "
+                    f"{sample_display} min={min_val} "
+                    f"half_min={half_min} imputing={impute_count}\n"
+                )
+                if log_fn is not None:
+                    log_fn(debug_message)
+                else:
+                    logger.info(debug_message.rstrip())
             row = row.fillna(half_min)
             imputed.loc[idx] = row
     elif method_norm == 'median_per_group':
@@ -2653,7 +2686,7 @@ def perform_statistical_analysis(
             local_overall_rows.append({id_column_name: metabolite_id, 'statistic': overall_stat, 'p_value': overall_p})
 
         overall_sig = (not np.isnan(overall_p)) and (overall_p <= alpha)
-        allow_posthoc = not has_insufficient_samples
+        allow_posthoc = True  # Allow post-hoc processing; individual comparisons will be filtered for insufficient samples
 
         if use_dunn and k >= 2 and allow_posthoc:
             pooled_vals = []

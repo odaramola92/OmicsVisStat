@@ -1539,42 +1539,90 @@ def detect_lipid_mode(df: pd.DataFrame) -> bool:
     return present >= 2  # At least 2 lipid columns present
 
 def aggregate_by_lipid_class(df: pd.DataFrame, sample_cols: List[str], *, 
-                              class_col: str = 'class') -> pd.DataFrame:
-    """Aggregate lipid data by class (mean of sample values per class).
+                              class_col: str = 'class',
+                              original_data: pd.DataFrame = None) -> pd.DataFrame:
+    """Aggregate lipid data by class (sum of sample values per class).
     
     Parameters
     ----------
     df : pd.DataFrame
-        Complete lipid dataframe with individual lipid rows
+        Complete lipid dataframe with individual lipid rows (may be imputed)
     sample_cols : List[str]
         Sample column names to aggregate
     class_col : str
         Column name containing lipid class (default: 'class')
+    original_data : pd.DataFrame, optional
+        Original data before imputation. Must have the same index as df.
+        If provided, only values that were non-zero in the original data are 
+        included in the aggregation. This prevents imputed values from creating 
+        classes that don't exist in negative polarity or other data subsets.
+        Completely excludes classes if all their lipids were imputed-only.
         
     Returns
     -------
     pd.DataFrame
-        Aggregated dataframe with one row per lipid class
+        Aggregated dataframe with one row per lipid class.
+        Classes with all-imputed lipids are excluded if original_data is provided.
     """
     if class_col not in df.columns:
         raise ValueError(f"Class column '{class_col}' not found in dataframe")
     
-    # Group by class and compute mean for sample columns
+    # Ensure original_data has same index as df if provided
+    if original_data is not None and not original_data.empty:
+        if len(original_data) != len(df):
+            raise ValueError(f"original_data must have same length as df: {len(original_data)} vs {len(df)}")
+        original_data = original_data.reset_index(drop=True)
+    
+    # Group by class and compute sum for sample columns
     # Exclude zeros and NaNs before aggregating (matching stats behavior)
-    def safe_mean(series):
+    def safe_sum(series):
         vals = pd.to_numeric(series, errors='coerce')
         vals = vals[~vals.isna() & (vals != 0)]
-        return vals.mean() if len(vals) > 0 else np.nan
+        return vals.sum() if len(vals) > 0 else np.nan
     
-    agg_dict = {col: safe_mean for col in sample_cols}
-    class_df = df.groupby(class_col, as_index=False).agg(agg_dict)
+    def safe_sum_with_original(series):
+        """Aggregation function that filters based on original data."""
+        col_name = series.name
+        idx = series.index
+        
+        # Get values from current series (may be imputed)
+        vals = pd.to_numeric(series, errors='coerce')
+        
+        # Get original values for the same rows
+        orig_vals = pd.to_numeric(original_data.loc[idx, col_name], errors='coerce')
+        
+        # Create mask: only include where original was non-zero/non-NaN
+        # (This means we only include values that actually existed in the original data)
+        mask = (orig_vals > 0) | (orig_vals.notna() & (orig_vals != 0))
+        vals_filtered = vals[mask]
+        
+        # Also exclude zeros and NaNs from the current values
+        vals_filtered = vals_filtered[~vals_filtered.isna() & (vals_filtered != 0)]
+        
+        return vals_filtered.sum() if len(vals_filtered) > 0 else np.nan
+    
+    # Choose aggregation function
+    if original_data is not None and not original_data.empty:
+        agg_dict = {col: safe_sum_with_original for col in sample_cols}
+    else:
+        agg_dict = {col: safe_sum for col in sample_cols}
+    
+    df_reset = df.reset_index(drop=True)
+    class_df = df_reset.groupby(class_col, as_index=False).agg(agg_dict)
     
     # Add lipid_class_id column for identification
     class_df.insert(0, 'lipid_class_id', class_df[class_col])
     
     # Add count column
-    class_counts = df.groupby(class_col).size()
+    class_counts = df_reset.groupby(class_col).size()
     class_df['n_lipids'] = class_df[class_col].map(class_counts)
+    
+    # If filtering by original data, remove classes that ended up with all NaN values
+    # This prevents imputed-only classes from appearing in the results
+    if original_data is not None and not original_data.empty:
+        # Check which classes have at least one non-NaN value in the sample columns
+        has_values = class_df[sample_cols].notna().any(axis=1)
+        class_df = class_df[has_values].reset_index(drop=True)
     
     return class_df
 
@@ -3924,6 +3972,11 @@ def run_boxplot_analysis(ctx: CommonVizContext, params: BoxplotParams) -> VizRes
             if found:
                 fc_col, p_col, _ = found
                 pair_records.append((g1, g2, fc_col, p_col))
+        
+        # AUTO-FIX: If custom list provided but no statistical columns found, auto-enable custom_only mode
+        if params.include_metabolites and not pair_records:
+            logger.info("   Boxplot: No statistical columns found. Auto-enabling custom-list-only mode.")
+            params.use_custom_only = True
 
         # Interpret params.fc_threshold <= 0 as "no fold-change cutoff" (p-value only)
         use_fc = bool(params.fc_threshold and params.fc_threshold > 0)
@@ -3949,33 +4002,46 @@ def run_boxplot_analysis(ctx: CommonVizContext, params: BoxplotParams) -> VizRes
             # Build list of masks according to selected pairs
             selected_pairs = pair_records
             
-            # When groups are selected, rebuild pair_records to only include pairs from selected groups
-            if params.selected_groups:
-                import itertools as _it2
-                selected_pairs = []
-                # Only look at pairs between selected groups
-                for g1, g2 in _it2.combinations(params.selected_groups, 2):
-                    found = _locate_pair_columns(df_all, g1, g2, prefer_adj=prefer_adj, verified_assignments=ctx.verified_assignments, stat_column_assignments=ctx.stat_column_assignments)
-                    if found:
-                        fc_col, p_col, _ = found
-                        selected_pairs.append((g1, g2, fc_col, p_col))
-                logger.info(f"   Boxplot: Selected groups mode - using {len(selected_pairs)} pairs from selected groups")
-            elif params.filter_mode == 'specific' and params.filter_pairs:
-                wanted = {tuple(sorted(p)) for p in params.filter_pairs}
-                selected_pairs = [pr for pr in pair_records if tuple(sorted(pr[:2])) in wanted]
-            
-            # Apply p-value and fold-change filters - ALWAYS apply these unless using custom_only mode
-            masks = [pd.Series(mask_for_pair(fc, pc)).fillna(False).to_numpy(dtype=bool) for _,_,fc,pc in selected_pairs]
-            if masks:
-                if params.filter_mode == 'all':
-                    agg = np.logical_and.reduce(np.asarray(masks, dtype=bool))
-                else:  # any or specific default to OR
-                    agg = np.logical_or.reduce(np.asarray(masks, dtype=bool))
-                df_filtered = df_all[agg].copy()
-                logger.info(f"   Boxplot: After p-value/FC filter: {len(df_filtered)} metabolites")
+            # FALLBACK: If no statistical columns found at all, fall back to showing all metabolites or custom list only
+            if not selected_pairs and not pair_records:
+                logger.warning("   Boxplot: No statistical columns found in data. Reverting to all metabolites or custom list only.")
+                if params.include_metabolites:
+                    logger.info("   Boxplot: Custom list provided - using custom-only mode")
+                    match_mask = match_metabolites_multi_column(df_all, params.include_metabolites, id_col)
+                    df_filtered = df_all[match_mask].copy()
+                    logger.info(f"   Boxplot: After custom-only filter: {len(df_filtered)} metabolites")
+                    params.use_custom_only = True  # Mark for later (to skip significance file)
+                else:
+                    logger.info("   Boxplot: No custom list and no statistics - showing all metabolites")
+                    df_filtered = df_all.copy()
             else:
-                logger.info(f"   Boxplot: No pair statistics available - using all metabolites")
-                df_filtered = df_all.copy()
+                # When groups are selected, rebuild pair_records to only include pairs from selected groups
+                if params.selected_groups:
+                    import itertools as _it2
+                    selected_pairs = []
+                    # Only look at pairs between selected groups
+                    for g1, g2 in _it2.combinations(params.selected_groups, 2):
+                        found = _locate_pair_columns(df_all, g1, g2, prefer_adj=prefer_adj, verified_assignments=ctx.verified_assignments, stat_column_assignments=ctx.stat_column_assignments)
+                        if found:
+                            fc_col, p_col, _ = found
+                            selected_pairs.append((g1, g2, fc_col, p_col))
+                    logger.info(f"   Boxplot: Selected groups mode - using {len(selected_pairs)} pairs from selected groups")
+                elif params.filter_mode == 'specific' and params.filter_pairs:
+                    wanted = {tuple(sorted(p)) for p in params.filter_pairs}
+                    selected_pairs = [pr for pr in pair_records if tuple(sorted(pr[:2])) in wanted]
+                
+                # Apply p-value and fold-change filters - ALWAYS apply these unless using custom_only mode
+                masks = [pd.Series(mask_for_pair(fc, pc)).fillna(False).to_numpy(dtype=bool) for _,_,fc,pc in selected_pairs]
+                if masks:
+                    if params.filter_mode == 'all':
+                        agg = np.logical_and.reduce(np.asarray(masks, dtype=bool))
+                    else:  # any or specific default to OR
+                        agg = np.logical_or.reduce(np.asarray(masks, dtype=bool))
+                    df_filtered = df_all[agg].copy()
+                    logger.info(f"   Boxplot: After p-value/FC filter: {len(df_filtered)} metabolites")
+                else:
+                    logger.info(f"   Boxplot: No pair statistics available - using all metabolites")
+                    df_filtered = df_all.copy()
 
         # Debug / transparency summary
         box_dir = ctx.output_dir if os.path.basename(ctx.output_dir.rstrip(os.sep)).lower() == 'boxplots' else os.path.join(ctx.output_dir, 'boxplots')

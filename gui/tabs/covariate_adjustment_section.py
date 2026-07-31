@@ -101,78 +101,32 @@ class CovariateAdjustmentSection:
                 pass
     
     def _auto_load_to_visualization(self):
-        """Auto-load covariate results to Visualization tab without switching."""
+        """Auto-load covariate results to Visualization tab silently (no debug output)."""
         try:
-            self._log('🔍 VIZ DEBUG: Starting auto-load to visualization...')
-            
             if not self.parent_tab:
-                self._log('❌ VIZ DEBUG: No parent tab found')
                 return
             
-            self._log(f'🔍 VIZ DEBUG: Parent tab exists: {type(self.parent_tab).__name__}')
-            
-            # Get the sample-to-group mapping from parent tab
-            group_map = None
+            # Store group mappings silently
             if hasattr(self.parent_tab, 'sample_group_vars') and self.parent_tab.sample_group_vars:
                 group_map = {}
                 for sample_col, group_var in self.parent_tab.sample_group_vars.items():
                     group_val = group_var.get()
                     if group_val:
                         group_map[sample_col] = group_val
-                self._log(f'🔍 VIZ DEBUG: Built group_map with {len(group_map)} samples')
-            else:
-                self._log('⚠️ VIZ DEBUG: No sample_group_vars available')
+                if group_map and hasattr(self.parent_tab, 'memory_store'):
+                    try:
+                        self.parent_tab.memory_store['sample_to_group'] = group_map
+                    except Exception:
+                        pass
             
-            # Store sample-to-group mapping in memory_store for visualization
-            if group_map and hasattr(self.parent_tab, 'memory_store'):
-                self.parent_tab.memory_store['sample_to_group'] = group_map
-                self._log(f'✅ VIZ DEBUG: Stored group mappings: {len(group_map)} samples across {len(set(group_map.values()))} groups')
-            else:
-                self._log('⚠️ VIZ DEBUG: Could not store group mappings in memory_store')
-            
-            # Check what's in memory_store
-            if hasattr(self.parent_tab, 'memory_store'):
-                self._log(f'🔍 VIZ DEBUG: memory_store keys: {list(self.parent_tab.memory_store.keys())}')
-            
-            # Check what's in statistical_test_results
-            if hasattr(self.parent_tab, 'statistical_test_results'):
-                self._log(f'🔍 VIZ DEBUG: statistical_test_results keys: {list(self.parent_tab.statistical_test_results.keys())}')
-            else:
-                self._log('⚠️ VIZ DEBUG: No statistical_test_results attribute on parent tab')
-            
-            # Notify Visualization tab that results are ready
+            # Notify Visualization tab silently
             if hasattr(self.parent_tab, 'notify_data_ready'):
-                self._log('🔍 VIZ DEBUG: Calling notify_data_ready...')
-                self.parent_tab.notify_data_ready("📊 Visualization", "covariate_results")
-            else:
-                self._log('⚠️ VIZ DEBUG: Parent tab missing notify_data_ready method')
-            
-            # Get Visualization tab and trigger its data loading
-            viz_tab = None
-            if hasattr(self.parent_tab, 'get_tab_by_name'):
-                self._log('🔍 VIZ DEBUG: Getting visualization tab by name...')
-                viz_tab = self.parent_tab.get_tab_by_name("📊 Visualization")
-                if viz_tab:
-                    self._log(f'✅ VIZ DEBUG: Found viz_tab: {type(viz_tab).__name__}')
-                else:
-                    self._log('❌ VIZ DEBUG: get_tab_by_name returned None')
-            else:
-                self._log('⚠️ VIZ DEBUG: Parent tab missing get_tab_by_name method')
-            
-            if viz_tab:
-                # Call visualization tab's data update method if available
-                if hasattr(viz_tab, 'update_viz_data_status'):
-                    self._log('🔍 VIZ DEBUG: Calling update_viz_data_status on viz_tab...')
-                    viz_tab.update_viz_data_status()
-                    self._log('✅ Covariate results auto-loaded to Visualization tab')
-                else:
-                    self._log('⚠️ VIZ DEBUG: viz_tab missing update_viz_data_status method')
-            else:
-                self._log('❌ VIZ DEBUG: Visualization tab not found for auto-load')
-        except Exception as e:
-            self._log(f'❌ VIZ DEBUG: Exception in auto-load: {e}')
-            import traceback
-            self._log(f'❌ VIZ DEBUG: Traceback:\n{traceback.format_exc()}')
+                try:
+                    self.parent_tab.notify_data_ready("📊 Visualization", "covariate_results")
+                except Exception:
+                    pass
+        except Exception:
+            pass
     
     def create_ui(self):
         """Create the covariate adjustment UI section"""
@@ -505,6 +459,9 @@ class CovariateAdjustmentSection:
         sample_col_combo = ttk.Combobox(top_frame, textvariable=sample_col_var, values=columns, state='readonly', width=40)
         sample_col_combo.pack(side='left', padx=8)
 
+        action_frame = tk.Frame(dialog)
+        action_frame.pack(fill='x', padx=12, pady=(0, 4))
+
         status_var = tk.StringVar(value='')
         tk.Label(dialog, textvariable=status_var, font=('Arial', 9), fg='#1565c0').pack(anchor='w', padx=12, pady=(0, 6))
 
@@ -582,9 +539,6 @@ class CovariateAdjustmentSection:
         _select_all_covars()
         _update_status()
 
-        footer = tk.Frame(dialog)
-        footer.pack(fill='x', padx=12, pady=10)
-
         def _on_ok():
             sample_col = sample_col_var.get()
             if sample_col not in columns:
@@ -624,8 +578,10 @@ class CovariateAdjustmentSection:
         def _on_cancel():
             dialog.destroy()
 
-        tk.Button(footer, text='Cancel', command=_on_cancel, width=10).pack(side='right')
-        tk.Button(footer, text='Apply Mapping', command=_on_ok, width=14, bg='#27ae60', fg='white').pack(side='right', padx=8)
+        button_holder = tk.Frame(action_frame)
+        button_holder.pack(side='right')
+        tk.Button(button_holder, text='Cancel', command=_on_cancel, width=10).pack(side='right')
+        tk.Button(button_holder, text='Apply Mapping', command=_on_ok, width=14, bg='#27ae60', fg='white').pack(side='right', padx=8)
 
         dialog.grab_set()
         dialog.wait_window()
@@ -1062,48 +1018,46 @@ class CovariateAdjustmentSection:
                 group_order = [self.parent_tab.group_definitions[gid] 
                               for gid in sorted(self.parent_tab.group_definitions.keys())]
             
-            # Get filtering parameters from parent tab
+            # Check if imputation mode is enabled (if so, filtering already done)
+            imputation_mode_enabled = False
+            if self.parent_tab and hasattr(self.parent_tab, 'enable_imputation_before_var'):
+                imputation_mode_enabled = bool(self.parent_tab.enable_imputation_before_var.get())
+            
+            # Get filtering parameters from parent tab (skip if imputation already handled filtering)
             min_samples_per_group = 2
             min_samples_type = 'absolute'
-            if self.parent_tab:
-                # First get the type to know which variable to read
-                if hasattr(self.parent_tab, 'min_samples_type_var'):
-                    min_samples_type = self.parent_tab.min_samples_type_var.get()
-                    self._log(f'🔍 COVARIATE DEBUG: Read min_samples_type={min_samples_type} from parent tab')
-                else:
-                    self._log(f'⚠️ COVARIATE DEBUG: Parent tab missing min_samples_type_var')
-                
-                # Now read the appropriate value based on type
-                if min_samples_type == 'percentage':
-                    if hasattr(self.parent_tab, 'min_samples_percent_var'):
-                        try:
-                            min_samples_per_group = float(self.parent_tab.min_samples_percent_var.get())
-                            self._log(f'🔍 COVARIATE DEBUG: Read min_samples_percent={min_samples_per_group}% from parent tab')
-                        except Exception as e:
-                            self._log(f'⚠️ COVARIATE DEBUG: Failed to read min_samples_percent_var: {e}')
-                            min_samples_per_group = 50.0
-                    else:
-                        self._log(f'⚠️ COVARIATE DEBUG: Parent tab missing min_samples_percent_var')
-                        min_samples_per_group = 50.0
-                else:  # absolute
-                    if hasattr(self.parent_tab, 'min_samples_per_group_var'):
-                        try:
-                            min_samples_per_group = int(self.parent_tab.min_samples_per_group_var.get())
-                            self._log(f'🔍 COVARIATE DEBUG: Read min_samples_per_group={min_samples_per_group} samples from parent tab')
-                        except Exception as e:
-                            self._log(f'⚠️ COVARIATE DEBUG: Failed to read min_samples_per_group: {e}')
-                            min_samples_per_group = 2
-                    else:
-                        self._log(f'⚠️ COVARIATE DEBUG: Parent tab missing min_samples_per_group_var')
-                        min_samples_per_group = 2
-            else:
-                self._log(f'⚠️ COVARIATE DEBUG: No parent tab available')
             
-            # Log filtering settings
-            if min_samples_type == 'percentage':
-                self._log(f'📊 Filtering: ≥{min_samples_per_group}% valid samples per group')
+            if imputation_mode_enabled:
+                # Imputation mode: filtering already done in imputation step, skip here
+                self._log(f'✅ COVARIATE: Imputation mode enabled - filtering already applied in imputation step, skipping')
+                min_samples_per_group = None  # Signal to covariate to skip filtering
+                min_samples_type = None
             else:
-                self._log(f'📊 Filtering: ≥{min_samples_per_group} valid samples per group')
+                # Standard mode: apply filtering based on user settings
+                if self.parent_tab:
+                    # First get the type to know which variable to read
+                    if hasattr(self.parent_tab, 'min_samples_type_var'):
+                        min_samples_type = self.parent_tab.min_samples_type_var.get()
+                    
+                    # Now read the appropriate value based on type
+                    if min_samples_type == 'percentage':
+                        if hasattr(self.parent_tab, 'min_samples_percent_var'):
+                            try:
+                                min_samples_per_group = float(self.parent_tab.min_samples_percent_var.get())
+                            except Exception:
+                                min_samples_per_group = 50.0
+                    else:  # absolute
+                        if hasattr(self.parent_tab, 'min_samples_per_group_var'):
+                            try:
+                                min_samples_per_group = int(self.parent_tab.min_samples_per_group_var.get())
+                            except Exception:
+                                min_samples_per_group = 2
+                
+                # Log filtering settings
+                if min_samples_type == 'percentage':
+                    self._log(f'📊 Filtering: ≥{min_samples_per_group}% valid samples per group')
+                else:
+                    self._log(f'📊 Filtering: ≥{min_samples_per_group} valid samples per group')
             
             # Log lipid class data availability
             if mode == 'lipid' and df_class is not None:

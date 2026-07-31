@@ -35,268 +35,191 @@ logger = logging.getLogger(__name__)
 
 
 class MachineLearningTab(BaseTab):
-    """
-    Machine Learning Tab for classification and dimensionality reduction.
-    
-    Follows the exact same workflow as Statistics tab:
-    - Step 1: Import Excel and verify columns
-    - Step 2: Configure sample groups
-    - Step 3: Configure ML settings
-    - Step 4: Run ML analysis (automatic filtering + merging + ML)
-    """
-    
     def __init__(self, parent, data_manager):
-        """Initialize Machine Learning tab"""
         super().__init__(parent, data_manager)
-        
-        # Get root window for dialogs
         self.root = parent.winfo_toplevel()
-        
-        # Initialize data storage (same pattern as Statistics tab)
-        self.ml_data_mode = tk.StringVar(value='custom')
-        self.pos_df = None
-        self.neg_df = None
-        self.detected_pos_sample_cols = []
-        self.detected_neg_sample_cols = []
-        self.detected_sample_cols = []
-        self.verified_pos_assignments = {}
-        self.verified_neg_assignments = {}
+        self._setup_ml_config_functions()
+        self.group_definitions = {'Group1': 'Group1', 'Group2': 'Group2'}
+        self.group_count = len(self.group_definitions)
+        self.group_id_vars = {}
+        self.auto_assign_patterns = {}
+        # Covariate adjustment state
+        self.covariate_adjustment_var = tk.BooleanVar(value=False)
+        self.covariate_cols = []
+        self.covariate_df = None
+        self.covariate_file_path = None
+        self.mapped_sample_id_col = None
+        # Working folder and other simple defaults
+        self.working_folder_var = tk.StringVar(value='')
+        self.pairwise_pvalue_map = {}
+        # Ensure figure and top-n helpers exist
+        if not hasattr(self, '_default_figure_settings'):
+            self._default_figure_settings = lambda: {
+                'dpi': 150,
+                'width': 8,
+                'height': 6,
+                'legend': True
+            }
+        self.figure_settings = self._default_figure_settings()
+        if not hasattr(self, '_default_top_n_values'):
+            self._default_top_n_values = lambda: (10, 20)
+        # top_n_values stored as a tuple of two ints
+        self.top_n_values: Tuple[int, int] = tuple(self._default_top_n_values())
+        # normalizer for top_n_values
+        if not hasattr(self, '_normalize_top_n_values'):
+            def _normalize_top_n_values(val):
+                try:
+                    if val is None:
+                        return tuple(self._default_top_n_values())
+                    vals = list(val) if not isinstance(val, (str, bytes)) else [int(val)]
+                    vals = [int(v) for v in vals]
+                    vals = tuple(sorted(set(vals)))
+                    if len(vals) >= 2:
+                        return vals[:2]
+                    return tuple(self._default_top_n_values())
+                except Exception:
+                    return tuple(self._default_top_n_values())
+            self._normalize_top_n_values = _normalize_top_n_values
+        # Sample / verification / data defaults
+        self.sample_group_vars = {}
         self.verified_pos_sample_cols = []
         self.verified_neg_sample_cols = []
-        self.verified_pos_feature_id_col = None  # Store feature ID column from Pos verification
-        self.verified_neg_feature_id_col = None  # Store feature ID column from Neg verification
-        self.sample_group_vars = {}
-        self.group_definitions = {'Group1': 'Control', 'Group2': 'Disease', 'Group3': 'Treatment', 'Group4': 'Other'}
-        self.group_count = 4
-        self.auto_assign_patterns = {}  # Store patterns for each group
-        self.pairwise_pvalue_map = {}  # Manual mapping: pair key -> selected p-value column
-        self.working_folder_var = tk.StringVar(value='')
-        self.figure_settings = self._default_figure_settings()
-        self.top_n_values = self._default_top_n_values()
-        
-        # ML results storage
-        self.ml_results = None
-        self.pairwise_ml_results = None
-        self.merged_data = None
-        
-        # Filtering configuration (same as Statistics tab)
-        self.min_samples_per_group_var = tk.StringVar(value='2')
+        self.verified_pos_feature_id_col = None
+        self.verified_neg_feature_id_col = None
+        self.verified_pos_assignments = {}
+        self.verified_neg_assignments = {}
+        self.pos_df = None
+        self.neg_df = None
+        self.pos_file_path = None
+        self.neg_file_path = None
+        # ML mode and filtering defaults
+        self.ml_data_mode = tk.StringVar(value='custom')
         self.min_samples_type_var = tk.StringVar(value='absolute')
-        self.min_samples_percent_var = tk.StringVar(value='50.0')
-        
-        # Setup UI
+        self.min_samples_per_group_var = tk.StringVar(value='1')
+        self.min_samples_percent_var = tk.StringVar(value='50')
+        self.min_samples_type = 'absolute'
+        self.min_samples_per_group = 1
+        self.min_samples_percent = 50
+        # Defaults for top-n and figure settings helpers (if methods exist they'll be used later)
+        if not hasattr(self, '_default_top_n_values'):
+            self._default_top_n_values = lambda: (10, 20)
         self.setup_ui()
-        
-        # Setup save/load config functions
-        self._setup_ml_config_functions()
-        
-        # Load saved config on startup
-        self._load_ml_config()
-        
-        logger.info("Machine Learning tab initialized")
 
-    def _default_figure_settings(self) -> Dict[str, float]:
-        """Default publication figure settings (user-adjustable)."""
-        return {
-            # ROC figure
-            'roc_width': 8.2,
-            'roc_height': 6.8,
-            'roc_title_fs': 16.0,
-            'roc_label_fs': 14.0,
-            'roc_tick_fs': 12.0,
-            'roc_legend_fs': 12.0,
-            'roc_line_w': 3.0,
-            'roc_axis_w': 1.6,
-
-            # Model comparison bar figure
-            'comparison_height': 6.0,
-            'comparison_base_width': 3.0,
-            'comparison_width_per_bar': 1.65,
-            'comparison_bar_w': 0.62,
-            'comparison_gap_w': 0.34,
-            'comparison_error_w': 2.4,
-            'comparison_title_fs': 16.0,
-            'comparison_label_fs': 14.0,
-            'comparison_tick_fs': 12.0,
-            'comparison_value_fs': 12.0,
-            'comparison_axis_w': 1.6,
-
-            # Horizontal top-metabolite bar figures
-            'hbar_width': 10.5,
-            'hbar_base_height': 2.4,
-            'hbar_height_per_feature': 0.52,
-            'hbar_bar_h': 0.55,
-            'hbar_gap_h': 0.28,
-            'hbar_error_w': 2.2,
-            'hbar_title_fs': 16.0,
-            'hbar_label_fs': 14.0,
-            'hbar_tick_fs': 12.0,
-            'hbar_axis_w': 1.6,
-        }
-
-    def _default_top_n_values(self) -> Tuple[int, int]:
-        """Default top-N ranks used for auto-generated metabolite and Venn figures."""
-        return (10, 15)
-
-    def _normalize_top_n_values(self, values: Any) -> Tuple[int, int]:
-        """Normalize a pair of top-N values into a sorted unique tuple."""
-        default_values = self._default_top_n_values()
-        if not isinstance(values, (list, tuple)) or len(values) != 2:
-            return default_values
-
-        cleaned = []
-        for value in values:
-            try:
-                cleaned.append(int(value))
-            except (TypeError, ValueError):
-                return default_values
-
-        if any(v <= 0 for v in cleaned):
-            return default_values
-
-        unique_sorted = tuple(sorted(set(cleaned)))
-        if len(unique_sorted) != 2:
-            return default_values
-        return unique_sorted[0], unique_sorted[1]
-    
     def setup_ui(self):
-        """Create the Machine Learning tab interface"""
-        # Main container
-        main_frame = tk.Frame(self.frame, bg='#f0f0f0')
-        main_frame.pack(fill='both', expand=True, padx=5, pady=5)
-        
-        # Title
-        tk.Label(
-            main_frame,
-            text='🤖 Machine Learning Analysis',
-            font=('Arial', 14, 'bold'),
-            bg='#f0f0f0'
-        ).pack(pady=(0, 10))
-        
-        # Create 3-column layout
-        body = tk.Frame(main_frame, bg='#f0f0f0')
-        body.pack(fill='both', expand=True)
-        body.grid_columnconfigure(0, weight=1)  # Left: Steps 1-2
-        body.grid_columnconfigure(1, weight=1)  # Middle: Step 3
-        body.grid_columnconfigure(2, weight=2)  # Right: Log + Step 4
+        """Build the machine learning tab UI."""
+        body = tk.Frame(self.frame, bg='#f0f0f0')
+        body.pack(fill='both', expand=True, padx=5, pady=5)
         body.grid_rowconfigure(0, weight=1)
-        
-        # ===== LEFT COLUMN: Steps 1-2 =====
-        left_frame = tk.LabelFrame(body, text='📋 Steps 1-2: Data & Groups', bg='#f0f0f0', font=('Arial', 11, 'bold'))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_columnconfigure(2, weight=1)
+
+        left_frame = tk.LabelFrame(body, text='📋 Step 1-2: Data Import & Groups', bg='#f0f0f0', font=('Arial', 11, 'bold'))
         left_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 3))
-        
-        # Add scrollbars to left panel
+
         left_canvas = tk.Canvas(left_frame, bg='#f0f0f0', highlightthickness=0)
         left_scrollbar_y = ttk.Scrollbar(left_frame, orient="vertical", command=left_canvas.yview)
         left_scrollbar_x = ttk.Scrollbar(left_frame, orient="horizontal", command=left_canvas.xview)
         left_scrollable = tk.Frame(left_canvas, bg='#f0f0f0')
-        
+
         left_scrollable.bind(
             "<Configure>",
             lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all"))
         )
-        
+
         left_canvas_window = left_canvas.create_window((0, 0), window=left_scrollable, anchor="nw")
         left_canvas.configure(yscrollcommand=left_scrollbar_y.set, xscrollcommand=left_scrollbar_x.set)
-        
+
         def configure_left_scroll(event):
             left_canvas.configure(scrollregion=left_canvas.bbox("all"))
             left_canvas.itemconfig(left_canvas_window, width=event.width)
-        
+
         left_canvas.bind('<Configure>', configure_left_scroll)
-        
+
         left_scrollbar_y.pack(side="right", fill="y", padx=(2, 0))
         left_scrollbar_x.pack(side="bottom", fill="x", pady=(2, 0))
         left_canvas.pack(side="left", fill="both", expand=True)
-        
-        # Mouse wheel scrolling
+
         def _on_left_mousewheel(event):
-            left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
         left_canvas.bind("<MouseWheel>", _on_left_mousewheel)
         left_scrollable.bind("<MouseWheel>", _on_left_mousewheel)
-        
-        # Create Steps 1-2 in first column
+
         self._create_step2_import_verify(left_scrollable)
         self._create_step3_group_config(left_scrollable)
-        
-        # ===== MIDDLE COLUMN: Step 3 =====
+
         middle_frame = tk.LabelFrame(body, text='⚙️ Step 3: ML Config', bg='#f0f0f0', font=('Arial', 11, 'bold'))
         middle_frame.grid(row=0, column=1, sticky='nsew', padx=3)
-        
-        # Add scrollbars to middle panel
+
         middle_canvas = tk.Canvas(middle_frame, bg='#f0f0f0', highlightthickness=0)
         middle_scrollbar_y = ttk.Scrollbar(middle_frame, orient="vertical", command=middle_canvas.yview)
         middle_scrollbar_x = ttk.Scrollbar(middle_frame, orient="horizontal", command=middle_canvas.xview)
         middle_scrollable = tk.Frame(middle_canvas, bg='#f0f0f0')
-        
+
         middle_scrollable.bind(
             "<Configure>",
             lambda e: middle_canvas.configure(scrollregion=middle_canvas.bbox("all"))
         )
-        
+
         middle_canvas_window = middle_canvas.create_window((0, 0), window=middle_scrollable, anchor="nw")
         middle_canvas.configure(yscrollcommand=middle_scrollbar_y.set, xscrollcommand=middle_scrollbar_x.set)
-        
+
         def configure_middle_scroll(event):
             middle_canvas.configure(scrollregion=middle_canvas.bbox("all"))
             middle_canvas.itemconfig(middle_canvas_window, width=event.width)
-        
+
         middle_canvas.bind('<Configure>', configure_middle_scroll)
-        
+
         middle_scrollbar_y.pack(side="right", fill="y", padx=(2, 0))
         middle_scrollbar_x.pack(side="bottom", fill="x", pady=(2, 0))
         middle_canvas.pack(side="left", fill="both", expand=True)
-        
-        # Mouse wheel scrolling
+
         def _on_middle_mousewheel(event):
-            middle_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            middle_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
         middle_canvas.bind("<MouseWheel>", _on_middle_mousewheel)
         middle_scrollable.bind("<MouseWheel>", _on_middle_mousewheel)
-        
-        # Create Step 3 in middle column
+
         self._create_step4_ml_config(middle_scrollable)
-        
-        # ===== RIGHT COLUMN: Step 4 + Log/Results =====
+
         right_frame = tk.LabelFrame(body, text='📈 Step 4: Results', bg='#f0f0f0', font=('Arial', 11, 'bold'))
         right_frame.grid(row=0, column=2, sticky='nsew', padx=(3, 0))
-        
-        # Add scrollbars to right panel
+
         right_canvas = tk.Canvas(right_frame, bg='#f0f0f0', highlightthickness=0)
         right_scrollbar_y = ttk.Scrollbar(right_frame, orient="vertical", command=right_canvas.yview)
         right_scrollbar_x = ttk.Scrollbar(right_frame, orient="horizontal", command=right_canvas.xview)
         right_scrollable = tk.Frame(right_canvas, bg='#f0f0f0')
-        
+
         right_scrollable.bind(
             "<Configure>",
             lambda e: right_canvas.configure(scrollregion=right_canvas.bbox("all"))
         )
-        
+
         right_canvas_window = right_canvas.create_window((0, 0), window=right_scrollable, anchor="nw")
         right_canvas.configure(yscrollcommand=right_scrollbar_y.set, xscrollcommand=right_scrollbar_x.set)
-        
+
         def configure_right_scroll(event):
             right_canvas.configure(scrollregion=right_canvas.bbox("all"))
             right_canvas.itemconfig(right_canvas_window, width=event.width)
-        
+
         right_canvas.bind('<Configure>', configure_right_scroll)
-        
+
         right_scrollbar_y.pack(side="right", fill="y", padx=(2, 0))
         right_scrollbar_x.pack(side="bottom", fill="x", pady=(2, 0))
         right_canvas.pack(side="left", fill="both", expand=True)
-        
-        # Mouse wheel scrolling
+
         def _on_right_mousewheel(event):
-            right_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+            right_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
         right_canvas.bind("<MouseWheel>", _on_right_mousewheel)
         right_scrollable.bind("<MouseWheel>", _on_right_mousewheel)
-        
-        # Action buttons at top
+
         action_container = tk.Frame(right_scrollable, bg='#f0f0f0')
         action_container.pack(fill='x', padx=5, pady=5)
-        
+
         self._create_step5_actions(action_container)
-        
-        # Results text area with scrollbar
+
         self.ml_log = scrolledtext.ScrolledText(
             right_scrollable,
             wrap=tk.WORD,
@@ -306,18 +229,17 @@ class MachineLearningTab(BaseTab):
             height=40
         )
         self.ml_log.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Initial welcome message
-        self.ml_log.insert(tk.END, "="*60 + "\n")
+
+        self.ml_log.insert(tk.END, "=" * 60 + "\n")
         self.ml_log.insert(tk.END, "🤖 Machine Learning Analysis Tool\n")
-        self.ml_log.insert(tk.END, "="*60 + "\n\n")
+        self.ml_log.insert(tk.END, "=" * 60 + "\n\n")
         self.ml_log.insert(tk.END, "Workflow:\n")
         self.ml_log.insert(tk.END, "1. Import Excel file\n")
         self.ml_log.insert(tk.END, "2. Verify columns\n")
         self.ml_log.insert(tk.END, "3. Configure sample groups\n")
         self.ml_log.insert(tk.END, "4. Run classification analysis\n\n")
         self.ml_log.insert(tk.END, "Ready to begin!\n\n")
-        
+
         logger.info("Machine Learning tab UI created")
     
     def _create_step1_mode_selection(self, parent):
@@ -391,7 +313,7 @@ class MachineLearningTab(BaseTab):
             justify='left'
         )
         self.working_folder_label.pack(fill='x', padx=7, pady=(0, 4))
-        
+
         tk.Button(
             frame,
             text='🔍 Verify Columns',
@@ -400,16 +322,234 @@ class MachineLearningTab(BaseTab):
             fg='white',
             **btn_style
         ).pack(fill='x', padx=5, pady=5)
-        
+
         # Status label
         self.data_status_label = tk.Label(
             frame,
-            text="⚠️ No data loaded",
-            fg="red",
+            text='⚠️ No data loaded',
+            fg='red',
             bg='#f0f0f0',
             font=('Arial', 9)
         )
         self.data_status_label.pack(pady=5)
+
+    def _show_covariate_mapping_dialog(self, raw_df: pd.DataFrame, sample_cols: List[str]):
+        """Let the user map a covariate file to the current analysis samples."""
+        if raw_df is None or raw_df.empty:
+            messagebox.showerror('Error', 'Uploaded covariate file is empty.')
+            return None
+
+        columns = [str(c) for c in raw_df.columns]
+        if not columns:
+            messagebox.showerror('Error', 'No columns found in covariate file.')
+            return None
+
+        normalize = lambda x: str(x).strip().casefold()
+        expected_norm = {normalize(s) for s in sample_cols} if sample_cols else set()
+
+        sample_candidates = [c for c in columns if any(k in normalize(c) for k in ['sample', 'sampleid', 'sample_id', 'id', 'subject'])]
+        default_sample_col = sample_candidates[0] if sample_candidates else columns[0]
+
+        result = {'confirmed': False, 'sample_id_col': None, 'covariate_cols': []}
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title('Covariate Column Mapping')
+        dialog.geometry('760x560')
+        dialog.minsize(700, 520)
+        dialog.transient(self.root)
+
+        tk.Label(dialog, text='Map covariate file columns', font=('Arial', 12, 'bold')).pack(anchor='w', padx=12, pady=(12, 4))
+        tk.Label(
+            dialog,
+            text='1) Choose Sample ID column. 2) Select covariate columns (Age, Sex, BMI, PMI, etc.).',
+            font=('Arial', 9),
+            fg='#333'
+        ).pack(anchor='w', padx=12, pady=(0, 8))
+
+        top_frame = tk.Frame(dialog)
+        top_frame.pack(fill='x', padx=12, pady=6)
+
+        tk.Label(top_frame, text='Sample ID column:', font=('Arial', 9, 'bold')).pack(side='left')
+        sample_col_var = tk.StringVar(value=default_sample_col)
+        sample_col_combo = ttk.Combobox(top_frame, textvariable=sample_col_var, values=columns, state='readonly', width=40)
+        sample_col_combo.pack(side='left', padx=8)
+
+        status_var = tk.StringVar(value='')
+        tk.Label(dialog, textvariable=status_var, font=('Arial', 9), fg='#1565c0').pack(anchor='w', padx=12, pady=(0, 6))
+
+        middle_frame = tk.Frame(dialog)
+        middle_frame.pack(fill='both', expand=True, padx=12, pady=6)
+
+        tk.Label(middle_frame, text='Covariate columns to include in model:', font=('Arial', 9, 'bold')).pack(anchor='w')
+
+        list_frame = tk.Frame(middle_frame)
+        list_frame.pack(fill='both', expand=True, pady=6)
+
+        covar_listbox = tk.Listbox(list_frame, selectmode='extended', exportselection=False)
+        covar_scroll = ttk.Scrollbar(list_frame, orient='vertical', command=covar_listbox.yview)
+        covar_listbox.configure(yscrollcommand=covar_scroll.set)
+        covar_listbox.pack(side='left', fill='both', expand=True)
+        covar_scroll.pack(side='right', fill='y')
+
+        for col in columns:
+            covar_listbox.insert('end', col)
+
+        btns = tk.Frame(dialog)
+        btns.pack(fill='x', padx=12, pady=(4, 2))
+
+        def _select_all_covars():
+            covar_listbox.selection_clear(0, 'end')
+            for i, col in enumerate(columns):
+                if col != sample_col_var.get():
+                    covar_listbox.selection_set(i)
+
+        def _clear_covars():
+            covar_listbox.selection_clear(0, 'end')
+
+        tk.Button(btns, text='Select All (except Sample ID)', command=_select_all_covars).pack(side='left')
+        tk.Button(btns, text='Clear', command=_clear_covars).pack(side='left', padx=6)
+
+        preview_text = tk.Text(dialog, height=10, wrap='word')
+        preview_text.pack(fill='x', padx=12, pady=(8, 4))
+
+        def _update_status(*_):
+            sample_col = sample_col_var.get()
+            if sample_col not in raw_df.columns:
+                status_var.set('Select a valid sample ID column.')
+                return
+
+            sample_values = raw_df[sample_col].dropna().astype(str).str.strip()
+            sample_norm = {normalize(v) for v in sample_values if str(v).strip()}
+            matched = len(sample_norm & expected_norm) if expected_norm else 0
+
+            if expected_norm:
+                status_var.set(f'Matched samples with current analysis set: {matched}/{len(expected_norm)}')
+            else:
+                status_var.set(f'Loaded sample IDs in selected column: {len(sample_norm)} (no active sample set to compare)')
+
+            preview_lines = []
+            preview_lines.append(f'Sample ID column: {sample_col}')
+            preview_lines.append(f'Sample values preview: {", ".join(sample_values.head(10).tolist())}')
+            if expected_norm:
+                missing = [s for s in sample_cols if normalize(s) not in sample_norm]
+                if missing:
+                    preview_lines.append(f'Missing from covariate file (first 10): {", ".join(missing[:10])}')
+                else:
+                    preview_lines.append('All analysis samples are present in covariate file.')
+
+            preview_text.config(state='normal')
+            preview_text.delete('1.0', 'end')
+            preview_text.insert('1.0', '\n'.join(preview_lines))
+            preview_text.config(state='disabled')
+
+            for i, col in enumerate(columns):
+                if col == sample_col:
+                    covar_listbox.selection_clear(i)
+
+        sample_col_combo.bind('<<ComboboxSelected>>', _update_status)
+        _select_all_covars()
+        _update_status()
+
+        footer = tk.Frame(dialog)
+        footer.pack(fill='x', padx=12, pady=10)
+
+        def _on_ok():
+            sample_col = sample_col_var.get()
+            if sample_col not in columns:
+                messagebox.showerror('Mapping Error', 'Please choose a valid Sample ID column.', parent=dialog)
+                return
+
+            selected_idxs = covar_listbox.curselection()
+            selected_covars = [columns[i] for i in selected_idxs if columns[i] != sample_col]
+
+            if not selected_covars:
+                proceed = messagebox.askyesno(
+                    'No Covariates Selected',
+                    'No covariate columns were selected. Continue anyway?',
+                    parent=dialog
+                )
+                if not proceed:
+                    return
+
+            if expected_norm:
+                sample_values = raw_df[sample_col].dropna().astype(str).str.strip()
+                sample_norm = {normalize(v) for v in sample_values if str(v).strip()}
+                matched = len(sample_norm & expected_norm)
+                if matched == 0:
+                    messagebox.showerror(
+                        'Mapping Error',
+                        'Selected Sample ID column does not match any currently assigned samples.\n'
+                        'Please choose the correct Sample ID column.',
+                        parent=dialog
+                    )
+                    return
+
+            result['confirmed'] = True
+            result['sample_id_col'] = sample_col
+            result['covariate_cols'] = selected_covars
+            dialog.destroy()
+
+        def _on_cancel():
+            dialog.destroy()
+
+        tk.Button(footer, text='Cancel', command=_on_cancel, width=10).pack(side='right')
+        tk.Button(footer, text='Apply Mapping', command=_on_ok, width=14, bg='#27ae60', fg='white').pack(side='right', padx=8)
+
+        dialog.grab_set()
+        dialog.wait_window()
+
+        if result['confirmed']:
+            return {'sample_id_col': result['sample_id_col'], 'covariate_cols': result['covariate_cols']}
+        return None
+
+    def _read_covariate_file_raw(self, file_path: str) -> pd.DataFrame:
+        """Read a covariate file without assigning an index."""
+        if file_path.endswith(('.xlsx', '.xls')):
+            return pd.read_excel(file_path)
+        if file_path.endswith('.csv'):
+            return pd.read_csv(file_path)
+        if file_path.endswith(('.txt', '.tsv')):
+            return pd.read_csv(file_path, sep='\t')
+        raise ValueError(f'Unsupported file format: {file_path}')
+
+    def _refresh_covariate_status_label(self):
+        """Update the covariate status label to reflect the loaded file and columns."""
+        if not hasattr(self, 'covariate_status_label'):
+            return
+
+        if getattr(self, 'covariate_df', None) is None or not getattr(self, 'covariate_cols', None):
+            self.covariate_status_label.config(text='No covariate file loaded', fg='#666666')
+            return
+
+        file_name = os.path.basename(str(self.covariate_file_path)) if getattr(self, 'covariate_file_path', None) else 'covariate file'
+        sample_label = f' | sample ID: {self.mapped_sample_id_col}' if getattr(self, 'mapped_sample_id_col', None) else ''
+        self.covariate_status_label.config(
+            text=f'Loaded: {file_name} | covariates: {len(self.covariate_cols)}{sample_label}',
+            fg='#2c3e50'
+        )
+
+    def _get_analysis_sample_columns_for_covariates(self) -> List[str]:
+        """Get the current ML analysis sample columns for covariate matching."""
+        if getattr(self, 'sample_group_vars', None):
+            cols = [str(c) for c in self.sample_group_vars.keys() if str(c).strip()]
+            if cols:
+                return cols
+
+        if getattr(self, 'verified_pos_sample_cols', None) or getattr(self, 'verified_neg_sample_cols', None):
+            seen = set()
+            union_cols = []
+            for cols in [self.verified_pos_sample_cols, self.verified_neg_sample_cols]:
+                for c in cols or []:
+                    if c not in seen:
+                        seen.add(c)
+                        union_cols.append(str(c))
+            if union_cols:
+                return union_cols
+
+        if getattr(self, 'detected_sample_cols', None):
+            return [str(c) for c in self.detected_sample_cols if str(c).strip()]
+
+        return []
 
     def _select_working_folder(self):
         """Select working folder used for automated figure exports."""
@@ -423,6 +563,59 @@ class MachineLearningTab(BaseTab):
 
         self._save_ml_config()
         self._log(f"📁 Working folder set: {selected_dir}\n")
+
+    def _load_ml_covariate_file(self):
+        """Load a covariate file for ML residual adjustment."""
+        file_path = filedialog.askopenfilename(
+            title='Select Covariate File',
+            filetypes=[
+                ('Excel files', '*.xlsx *.xls'),
+                ('CSV files', '*.csv'),
+                ('Text files', '*.txt *.tsv'),
+                ('All files', '*.*'),
+            ]
+        )
+        if not file_path:
+            return
+
+        try:
+            raw_df = self._read_covariate_file_raw(file_path)
+            sample_cols = self._get_analysis_sample_columns_for_covariates()
+            mapping = self._show_covariate_mapping_dialog(raw_df, sample_cols)
+            if mapping is None:
+                self._log('Covariate load cancelled by user during column mapping.')
+                return
+
+            sample_id_col = mapping['sample_id_col']
+            selected_covariates = mapping['covariate_cols']
+
+            if sample_id_col not in raw_df.columns:
+                raise ValueError(f"Selected sample ID column '{sample_id_col}' not found in file")
+
+            df_cov = raw_df.copy()
+            df_cov[sample_id_col] = df_cov[sample_id_col].astype(str).str.strip()
+            df_cov = df_cov[df_cov[sample_id_col].str.len() > 0].copy()
+            if df_cov[sample_id_col].duplicated().any():
+                dup_count = int(df_cov[sample_id_col].duplicated().sum())
+                self._log(f'⚠️ Found {dup_count} duplicate sample IDs in covariate file; keeping first occurrence per sample.')
+                df_cov = df_cov.drop_duplicates(subset=[sample_id_col], keep='first')
+
+            keep_covars = [c for c in selected_covariates if c in df_cov.columns]
+            self.covariate_df = df_cov.set_index(sample_id_col)[keep_covars]
+            self.covariate_file_path = file_path
+            self.covariate_cols = keep_covars
+            self.mapped_sample_id_col = sample_id_col
+            self._refresh_covariate_status_label()
+            self._save_ml_config()
+
+            preview = ', '.join(keep_covars[:8])
+            if len(keep_covars) > 8:
+                preview += ' ...'
+            self._log(f"🧬 Loaded covariate file: {os.path.basename(file_path)}\n")
+            self._log(f"   Mapping used -> sample ID column: {sample_id_col}; selected covariates: {preview if preview else 'None'}\n")
+        except Exception as e:
+            logger.error(f"Error loading ML covariate file: {e}", exc_info=True)
+            messagebox.showerror('Error', f'Failed to load covariate file:\n{str(e)}')
 
     def _open_figure_settings_dialog(self):
         """Popup to configure figure size, fonts, and line/bar thickness."""
@@ -640,6 +833,8 @@ class MachineLearningTab(BaseTab):
         
         # Populate initial groups
         self.refresh_group_ui()
+        # Insert covariate panel directly under Group IDs & Labels
+        self._create_covariate_panel(frame)
         
         # ========== Feature Filters (right under groups) ==========
         feature_filter_frame = tk.LabelFrame(frame, text='Feature Filters (combinable)', bg='#f0f0f0', font=('Arial', 9, 'bold'))
@@ -729,6 +924,7 @@ class MachineLearningTab(BaseTab):
         tk.Label(feature_filter_frame, text='ⓘ Columns must be assigned in Verify Columns.', 
                 bg='#fff3cd', fg='#856404', font=('Arial', 7), justify='left', padx=3, pady=3).pack(fill='x', padx=5, pady=(0, 5))
 
+        # (Covariate panel moved to appear after Configure Groups)
     
     def _create_step4_ml_config(self, parent):
         """Step 3: ML configuration - content goes directly in parent (no extra wrapper)"""
@@ -907,7 +1103,7 @@ class MachineLearningTab(BaseTab):
             pady=2
         ).pack(anchor='w', padx=5)
 
-        # Advanced validation/tuning controls
+        # Advanced Validation & Tuning (moved into middle column under Configure Figures)
         adv_frame = tk.LabelFrame(parent, text='🧪 Advanced Validation & Tuning', bg='#f0f0f0')
         adv_frame.pack(fill='x', padx=5, pady=5)
 
@@ -1076,6 +1272,49 @@ class MachineLearningTab(BaseTab):
         # Keep feature-selection controls in sync with selected method.
         self.feature_selection_method_var.trace_add('write', lambda *_: self._update_feature_selection_controls())
         self._update_feature_selection_controls()
+
+    def _create_covariate_panel(self, parent):
+        """Create covariate adjustment panel shown after Configure Groups."""
+        cov_frame = tk.LabelFrame(parent, text='Covariate Adjustment', bg='#f0f0f0', font=('Arial', 9, 'bold'))
+        cov_frame.pack(fill='x', padx=5, pady=(6, 10))
+
+        row = tk.Frame(cov_frame, bg='#f0f0f0')
+        row.pack(fill='x', padx=5, pady=(5, 2))
+        tk.Checkbutton(
+            row,
+            text='Adjust features for covariates before ML',
+            variable=self.covariate_adjustment_var,
+            command=self._save_ml_config,
+            bg='#f0f0f0',
+            font=('Arial', 9, 'bold'),
+        ).pack(anchor='w')
+
+        row = tk.Frame(cov_frame, bg='#f0f0f0')
+        row.pack(fill='x', padx=5, pady=2)
+        tk.Button(
+            row,
+            text='📂 Load Covariate File',
+            command=self._load_ml_covariate_file,
+            bg='#2980b9',
+            fg='white',
+            font=('Arial', 9, 'bold'),
+            relief='raised',
+            bd=2,
+            padx=6,
+            pady=2,
+        ).pack(side='left')
+
+        self.covariate_status_label = tk.Label(
+            cov_frame,
+            text='No covariate file loaded',
+            bg='#f0f0f0',
+            fg='#666666',
+            font=('Arial', 8),
+            anchor='w',
+            justify='left'
+        )
+        self.covariate_status_label.pack(fill='x', padx=5, pady=(2, 5))
+        
     
     def _create_step5_actions(self, parent):
         """Step 4: Action buttons"""
@@ -1310,6 +1549,10 @@ class MachineLearningTab(BaseTab):
         self.imputation_method_var.set('half_min')
         self.imputation_knn_neighbors_var.set('5')
         self.auto_skip_scaling_tree_var.set(False)
+        self.covariate_adjustment_var.set(False)
+        self.covariate_file_path = None
+        self.covariate_df = None
+        self.covariate_cols = []
         self.feature_selection_method_var.set('none')
         self.variance_percentile_var.set('10')
         self.univariate_k_var.set('50')
@@ -1317,6 +1560,7 @@ class MachineLearningTab(BaseTab):
         self.rfe_n_features_var.set('50')
 
         self._update_feature_selection_controls()
+        self._refresh_covariate_status_label()
         self._save_ml_config()
         self._log("\n♻️ Restored ML defaults.\n")
     
@@ -2268,6 +2512,17 @@ class MachineLearningTab(BaseTab):
             self._log("Step 2: Running ML analysis...\n")
             
             from main_script.ml_models import MetabolomicsMLAnalysis, format_classification_summary, format_pca_summary
+
+            covariate_data = self.covariate_df if self.covariate_adjustment_var.get() else None
+            covariate_cols = list(self.covariate_cols) if self.covariate_adjustment_var.get() else []
+            if self.covariate_adjustment_var.get() and (covariate_data is None or not covariate_cols):
+                self._log("❌ Covariate adjustment is enabled but no covariate file/columns are loaded.\n")
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Covariates Not Loaded",
+                    "Covariate adjustment is enabled, but no covariate file or detected covariate columns are available.\n\n"
+                    "Load a covariate file first, or disable covariate adjustment."
+                ))
+                return
             
             # Get feature ID column from verified columns
             feature_id_col = self._get_feature_id_column(merged_df)
@@ -2276,7 +2531,9 @@ class MachineLearningTab(BaseTab):
                 data_df=merged_df,
                 group_assignments=group_map,
                 feature_columns=feature_cols,
-                feature_id_col=feature_id_col
+                feature_id_col=feature_id_col,
+                covariate_data=covariate_data,
+                covariate_cols=covariate_cols
             )
             
             analysis_type = 'classification'
@@ -2940,6 +3197,8 @@ class MachineLearningTab(BaseTab):
                 group_assignments=pair_group_map,
                 feature_columns=pair_feature_cols,
                 feature_id_col=feature_id_col,
+                covariate_data=self.covariate_df if self.covariate_adjustment_var.get() else None,
+                covariate_cols=list(self.covariate_cols) if self.covariate_adjustment_var.get() else [],
             )
 
             try:
@@ -3040,6 +3299,95 @@ class MachineLearningTab(BaseTab):
         # Create cross-pair metric comparison bar graphs.
         auc_rows = []
         acc_rows = []
+        pairwise_roc_rows = []
+
+        def _extract_pairwise_roc_payload(res: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            """Return the best ROC payload for a pairwise run, preferring the best AUC model."""
+            if not isinstance(res, dict):
+                return None
+
+            from sklearn.metrics import roc_auc_score, roc_curve
+
+            def _mean_roc_from_runs(runs: List[Dict[str, Any]], class_index: int = 1) -> Optional[Dict[str, Any]]:
+                mean_fpr = np.linspace(0, 1, 200)
+                tprs = []
+                aucs = []
+
+                for run_entry in runs or []:
+                    y_test = run_entry.get('y_test')
+                    y_proba = run_entry.get('y_pred_proba')
+                    if y_test is None or y_proba is None:
+                        continue
+
+                    y_test = np.asarray(y_test)
+                    y_proba = np.asarray(y_proba)
+                    if y_proba.ndim != 2 or y_proba.shape[1] <= class_index:
+                        continue
+
+                    try:
+                        if len(np.unique(y_test)) < 2:
+                            continue
+                        fpr, tpr, _ = roc_curve(y_test, y_proba[:, class_index])
+                        interp_tpr = np.interp(mean_fpr, fpr, tpr)
+                        interp_tpr[0] = 0.0
+                        tprs.append(interp_tpr)
+                        aucs.append(float(roc_auc_score(y_test, y_proba[:, class_index])))
+                    except Exception:
+                        continue
+
+                if not tprs:
+                    return None
+
+                mean_tpr = np.mean(tprs, axis=0)
+                mean_tpr[-1] = 1.0
+                std_tpr = np.std(tprs, axis=0) if len(tprs) > 1 else np.zeros_like(mean_tpr)
+                mean_auc = float(np.mean(aucs)) if aucs else float('nan')
+                std_auc = float(np.std(aucs, ddof=1)) if len(aucs) > 1 else 0.0
+                return {
+                    'mean_fpr': mean_fpr,
+                    'mean_tpr': mean_tpr,
+                    'std_tpr': std_tpr,
+                    'mean_auc': mean_auc,
+                    'std_auc': std_auc,
+                }
+
+            if res.get('comparison_type') == 'multi_model':
+                model_results = res.get('model_results', {}) or {}
+                candidate_models = [m for m in res.get('models_trained', []) if model_results.get(m)]
+                if not candidate_models:
+                    return None
+
+                def _model_rank(model_name: str) -> tuple:
+                    model_info = model_results.get(model_name, {}) or {}
+                    auc_val = model_info.get('auc_mean')
+                    acc_val = model_info.get('test_accuracy_mean')
+                    return (
+                        float(auc_val) if auc_val is not None else -np.inf,
+                        float(acc_val) if acc_val is not None else -np.inf,
+                    )
+
+                best_model = max(candidate_models, key=_model_rank)
+                best_info = model_results.get(best_model, {}) or {}
+                best_runs = best_info.get('runs', []) or []
+                roc_payload = _mean_roc_from_runs(best_runs, class_index=1)
+                if roc_payload is None:
+                    return None
+                roc_payload['label'] = f"{best_model}"
+                return roc_payload
+
+            runs = res.get('run_results') or []
+            if not runs:
+                y_test = res.get('y_test')
+                y_proba = res.get('y_test_pred_proba')
+                if y_test is None or y_proba is None:
+                    return None
+                runs = [{'y_test': y_test, 'y_pred_proba': y_proba}]
+
+            roc_payload = _mean_roc_from_runs(runs, class_index=1)
+            if roc_payload is None:
+                return None
+            roc_payload['label'] = str(res.get('model_name', 'Model'))
+            return roc_payload
         for entry in pairwise_runs:
             if entry.get('status') != 'ok':
                 continue
@@ -3068,6 +3416,17 @@ class MachineLearningTab(BaseTab):
                             'Mean': float(acc_val),
                             'Std': float(model_res.get('test_accuracy_std') or 0.0),
                         })
+                roc_payload = _extract_pairwise_roc_payload(res)
+                if roc_payload is not None:
+                    pairwise_roc_rows.append({
+                        'Pair': pair_name,
+                        'Label': f"{pair_name} | {roc_payload['label']}",
+                        'Mean_FPR': roc_payload['mean_fpr'],
+                        'Mean_TPR': roc_payload['mean_tpr'],
+                        'Std_TPR': roc_payload['std_tpr'],
+                        'Mean_AUC': roc_payload['mean_auc'],
+                        'Std_AUC': roc_payload['std_auc'],
+                    })
             else:
                 auc_val = res.get('auc')
                 acc_val = res.get('test_accuracy')
@@ -3084,6 +3443,17 @@ class MachineLearningTab(BaseTab):
                         'Model': res.get('model_name', 'Model'),
                         'Mean': float(acc_val),
                         'Std': float(res.get('test_accuracy_std') or 0.0),
+                    })
+                roc_payload = _extract_pairwise_roc_payload(res)
+                if roc_payload is not None:
+                    pairwise_roc_rows.append({
+                        'Pair': pair_name,
+                        'Label': f"{pair_name} | {roc_payload['label']}",
+                        'Mean_FPR': roc_payload['mean_fpr'],
+                        'Mean_TPR': roc_payload['mean_tpr'],
+                        'Std_TPR': roc_payload['std_tpr'],
+                        'Mean_AUC': roc_payload['mean_auc'],
+                        'Std_AUC': roc_payload['std_auc'],
                     })
 
         auc_plot_path = None
@@ -3106,7 +3476,7 @@ class MachineLearningTab(BaseTab):
                 metric_pivot = metric_df.pivot_table(index='Pair', columns='Model', values='Mean', aggfunc='mean')
                 std_pivot = metric_df.pivot_table(index='Pair', columns='Model', values='Std', aggfunc='mean').reindex_like(metric_pivot)
                 fig_w = max(8.5, 2.4 + 1.7 * len(metric_pivot.index))
-                fig_h = 6.0
+                fig_h = max(6.2, 5.0 + 0.2 * len(metric_pivot.index))
                 fig, ax = plt.subplots(figsize=(fig_w, fig_h))
                 metric_pivot.plot(kind='bar', ax=ax, width=0.8)
                 ax.set_ylim(0.0, 1.0)
@@ -3114,7 +3484,7 @@ class MachineLearningTab(BaseTab):
                 ax.set_xlabel('Pairwise Comparison', fontweight='bold')
                 ax.set_title(f'Pairwise {metric_label} Comparison', fontweight='bold')
                 ax.grid(axis='y', alpha=0.25)
-                ax.tick_params(axis='x', rotation=20)
+                ax.tick_params(axis='x', rotation=18)
                 for lbl in ax.get_xticklabels() + ax.get_yticklabels():
                     lbl.set_fontweight('bold')
                 leg = ax.legend(title='Model', framealpha=0.95)
@@ -3123,42 +3493,40 @@ class MachineLearningTab(BaseTab):
                         txt.set_fontweight('bold')
 
                 pair_index = list(metric_pivot.index)
+                containers = list(ax.containers)
                 top_candidates = []
-                for pair_idx, pair_name in enumerate(pair_index):
-                    if pair_name not in std_pivot.index:
+                for model_idx, model_name in enumerate(metric_pivot.columns):
+                    if model_idx >= len(containers):
                         continue
-                    for model_idx, model_name in enumerate(metric_pivot.columns):
-                        value = _safe_float(metric_pivot.loc[pair_name, model_name])
+                    container = containers[model_idx]
+                    for pair_idx, pair_name in enumerate(pair_index):
+                        if pair_idx >= len(container):
+                            continue
+                        value = _safe_float(metric_pivot.iloc[pair_idx, model_idx])
                         if value is None:
                             continue
-                        std_val = _safe_float(std_pivot.loc[pair_name, model_name]) or 0.0
-                        bar = None
-                        for container in ax.containers:
-                            if model_idx < len(container):
-                                bar = container[model_idx]
-                                break
-                        if bar is None:
-                            continue
+                        std_val = _safe_float(std_pivot.iloc[pair_idx, model_idx]) or 0.0
+                        bar = container[pair_idx]
                         x = bar.get_x() + bar.get_width() / 2
                         top = value + std_val
                         top_candidates.append(top)
                         ax.errorbar(x, value, yerr=std_val, fmt='none', ecolor='black', elinewidth=1.1, capsize=3, capthick=1.1, zorder=4)
                         ax.text(
                             x,
-                            top + 0.03,
+                            top + 0.03 + (0.02 * model_idx),
                             f"{value:.3f}±{std_val:.3f}",
                             ha='center',
                             va='bottom',
-                            fontsize=comparison_value_fs,
+                            fontsize=max(10.0, comparison_value_fs - 1.0),
                             fontweight='bold',
                             rotation=0,
                             clip_on=False,
                         )
 
                 if top_candidates:
-                    ax.set_ylim(0.0, max(1.0, max(top_candidates) + 0.12))
+                    ax.set_ylim(0.0, max(1.0, max(top_candidates) + 0.16))
 
-                ax.margins(y=0.12)
+                ax.margins(y=0.16)
                 fig.tight_layout()
                 out_path = os.path.join(addon_root, filename)
                 fig.savefig(out_path, dpi=300, bbox_inches='tight')
@@ -3171,6 +3539,46 @@ class MachineLearningTab(BaseTab):
 
         auc_plot_path = _plot_pair_metric(pd.DataFrame(auc_rows), 'AUC', 'pairwise_auc_comparison.png')
         acc_plot_path = _plot_pair_metric(pd.DataFrame(acc_rows), 'Accuracy', 'pairwise_accuracy_comparison.png')
+
+        pairwise_roc_path = None
+        try:
+            if pairwise_roc_rows:
+                import matplotlib.pyplot as plt
+
+                fig, ax = plt.subplots(figsize=(9.6, 7.2))
+                colors = ['#4C78A8', '#F58518', '#54A24B', '#E45756', '#72B7B2', '#B279A2']
+                plotted = 0
+                for idx, row in enumerate(pairwise_roc_rows):
+                    mean_fpr = np.asarray(row['Mean_FPR'], dtype=float)
+                    mean_tpr = np.asarray(row['Mean_TPR'], dtype=float)
+                    std_tpr = np.asarray(row['Std_TPR'], dtype=float)
+                    label = f"{row['Label']} (AUC={float(row['Mean_AUC']):.2f} ± {float(row['Std_AUC']):.2f})"
+                    color = colors[idx % len(colors)]
+                    ax.plot(mean_fpr, mean_tpr, lw=2.8, color=color, label=label)
+                    ax.fill_between(mean_fpr, np.maximum(mean_tpr - std_tpr, 0), np.minimum(mean_tpr + std_tpr, 1), color=color, alpha=0.12)
+                    plotted += 1
+
+                ax.plot([0, 1], [0, 1], linestyle='--', color='gray', lw=1.4)
+                ax.set_xlim(0.0, 1.0)
+                ax.set_ylim(0.0, 1.0)
+                ax.set_xlabel('False Positive Rate', fontweight='bold')
+                ax.set_ylabel('True Positive Rate', fontweight='bold')
+                ax.set_title('Pairwise ROC Comparison (All Group Pairs)', fontweight='bold')
+                ax.grid(alpha=0.25)
+                ax.tick_params(axis='both', labelsize=11, width=1.4, length=5)
+                for tick in ax.get_xticklabels() + ax.get_yticklabels():
+                    tick.set_fontweight('bold')
+                leg = ax.legend(loc='lower right', framealpha=0.95, fontsize=10)
+                if leg:
+                    for txt in leg.get_texts():
+                        txt.set_fontweight('bold')
+                fig.tight_layout()
+                pairwise_roc_path = os.path.join(addon_root, 'pairwise_combined_roc.png')
+                fig.savefig(pairwise_roc_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                self._log(f"\n📈 Pairwise combined ROC saved: {pairwise_roc_path}\n")
+        except Exception as roc_err:
+            self._log(f"\n⚠️ Could not generate pairwise combined ROC plot: {roc_err}\n")
 
         excel_write_start = perf_counter()
         excel_path = os.path.join(addon_root, 'pairwise_ml_results.xlsx')
@@ -3226,6 +3634,7 @@ class MachineLearningTab(BaseTab):
             'excel_path': excel_path,
             'auc_plot_path': auc_plot_path,
             'accuracy_plot_path': acc_plot_path,
+            'pairwise_roc_path': pairwise_roc_path,
             'pairs': pairwise_runs,
             'elapsed_seconds': total_elapsed,
         }
@@ -3528,7 +3937,9 @@ class MachineLearningTab(BaseTab):
                 data_df=merged_df,
                 group_assignments=group_map,
                 feature_columns=feature_cols,
-                feature_id_col=feature_id_col
+                feature_id_col=feature_id_col,
+                covariate_data=self.covariate_df if self.covariate_adjustment_var.get() else None,
+                covariate_cols=list(self.covariate_cols) if self.covariate_adjustment_var.get() else [],
             )
             
             # Test all combinations
@@ -3859,10 +4270,10 @@ class MachineLearningTab(BaseTab):
     def _filter_features_by_group(self, df: pd.DataFrame, sample_cols: List[str], 
                                    group_map: Dict[str, str], group_thresholds: Dict[str, int]) -> pd.DataFrame:
         """
-        Filter features to keep only those with >= threshold detections in EACH group.
+        #Filter features to keep only those with >= threshold detections in EACH group.
         
-        Example: If threshold=8, and feature has Control=7, PD=10, it's removed
-        because Control didn't meet the threshold.
+        #Example: If threshold=8, and feature has Control=7, PD=10, it is removed
+        #because Control did not meet the threshold.
         """
         # Group samples by their group assignment
         groups_samples = {}
@@ -4138,6 +4549,10 @@ class MachineLearningTab(BaseTab):
             'imputation_method': self.imputation_method_var.get(),
             'imputation_knn_neighbors': self.imputation_knn_neighbors_var.get(),
             'auto_skip_scaling_for_trees': self.auto_skip_scaling_tree_var.get(),
+            'covariate_adjustment': self.covariate_adjustment_var.get(),
+            'covariate_file_path': self.covariate_file_path,
+            'covariate_cols': list(self.covariate_cols),
+            'covariate_sample_id_col': self.mapped_sample_id_col,
             'feature_selection_method': self.feature_selection_method_var.get(),
             'variance_percentile': self.variance_percentile_var.get(),
             'univariate_k': self.univariate_k_var.get(),
@@ -4266,6 +4681,22 @@ class MachineLearningTab(BaseTab):
                 self.imputation_knn_neighbors_var.set(config.get('imputation_knn_neighbors', '5'))
             if 'auto_skip_scaling_for_trees' in config:
                 self.auto_skip_scaling_tree_var.set(config.get('auto_skip_scaling_for_trees', False))
+            if 'covariate_adjustment' in config:
+                self.covariate_adjustment_var.set(config.get('covariate_adjustment', False))
+            if 'covariate_cols' in config and isinstance(config.get('covariate_cols'), list):
+                self.covariate_cols = [str(c) for c in config.get('covariate_cols', []) if str(c).strip()]
+            if 'covariate_file_path' in config:
+                self.covariate_file_path = config.get('covariate_file_path') or None
+                if self.covariate_file_path and os.path.exists(self.covariate_file_path):
+                    try:
+                        from main_script.covariate_adjustment import load_covariate_file
+                        self.covariate_df = load_covariate_file(self.covariate_file_path)
+                    except Exception:
+                        self.covariate_df = None
+                else:
+                    self.covariate_df = None
+            if 'covariate_sample_id_col' in config:
+                self.mapped_sample_id_col = config.get('covariate_sample_id_col') or None
             if 'feature_selection_method' in config:
                 self.feature_selection_method_var.set(config.get('feature_selection_method', 'none'))
             if 'variance_percentile' in config:
@@ -4304,6 +4735,8 @@ class MachineLearningTab(BaseTab):
                 self.figure_settings = merged
             if 'top_n_values' in config:
                 self.top_n_values = self._normalize_top_n_values(config.get('top_n_values'))
+
+            self._refresh_covariate_status_label()
 
             self._update_feature_selection_controls()
 

@@ -132,8 +132,8 @@ class StatisticsTab(BaseTab):
                     print(f"✅ Updated Visualization tab data status")
                 # Do not auto-switch here; switch occurs upon export
                 self._thread_safe_log("✅ Visualization data autoloaded (no auto-switch).\n")
-            else:
-                print(f"⚠️ Visualization tab not found")
+            # else:
+            #     print(f"⚠️ Visualization tab not found")
         except Exception as e:
             print(f"Warning: Could not auto-load to visualization: {e}")
 
@@ -194,7 +194,7 @@ class StatisticsTab(BaseTab):
                 Parameters:
                     df (pd.DataFrame): Pairwise results with at least 'p_value' or 'p_value_adj'.
                     method (str): One of {'Bonferroni','Holm','Hochberg','BY','BH','None'}.
-                    scope (str): FDR scope ('per-comparison','per-metabolite','global').
+                    scope (str): FDR scope ('per-comparison','per-feature','global').
                 Notes:
                     - We re-compute adjusted p-values from raw 'p_value' (BH removed) to keep semantics.
                     - For Tukey/Dunn outputs having 'p_value_adj' only, we derive raw vector from available columns if possible.
@@ -314,6 +314,9 @@ class StatisticsTab(BaseTab):
                     'data_mode': self.statistics_data_mode.get() if hasattr(self, 'statistics_data_mode') else 'metabolite',
                     'custom_comparisons': self.custom_comparisons_var.get() if hasattr(self, 'custom_comparisons_var') else '',
                     'filter_timing': self.filter_timing_var.get() if hasattr(self, 'filter_timing_var') else 'before',
+                    'enable_imputation_before': bool(self.enable_imputation_before_var.get()) if hasattr(self, 'enable_imputation_before_var') else False,
+                    'imputation_before_method': self.imputation_before_method_var.get() if hasattr(self, 'imputation_before_method_var') else 'half_min',
+                    'imputation_before_knn_neighbors': self.imputation_before_knn_neighbors_var.get() if hasattr(self, 'imputation_before_knn_neighbors_var') else '5',
                     'enable_variability_filter': bool(self.enable_variability_filter_var.get()) if hasattr(self, 'enable_variability_filter_var') else False,
                     'variability_percentile': self.variability_percent_var.get() if hasattr(self, 'variability_percent_var') else '10',
                     'enable_imputation': bool(self.enable_imputation_var.get()) if hasattr(self, 'enable_imputation_var') else False,
@@ -398,6 +401,12 @@ class StatisticsTab(BaseTab):
                     self.enable_variability_filter_var.set(bool(data.get('enable_variability_filter', False)))
                 if hasattr(self, 'variability_percent_var') and 'variability_percentile' in data:
                     self.variability_percent_var.set(str(data.get('variability_percentile', '10')))
+                if hasattr(self, 'enable_imputation_before_var') and 'enable_imputation_before' in data:
+                    self.enable_imputation_before_var.set(bool(data.get('enable_imputation_before', False)))
+                if hasattr(self, 'imputation_before_method_var') and 'imputation_before_method' in data:
+                    self.imputation_before_method_var.set(str(data.get('imputation_before_method', 'half_min')))
+                if hasattr(self, 'imputation_before_knn_neighbors_var') and 'imputation_before_knn_neighbors' in data:
+                    self.imputation_before_knn_neighbors_var.set(str(data.get('imputation_before_knn_neighbors', '5')))
                 if hasattr(self, 'enable_imputation_var') and 'enable_imputation' in data:
                     self.enable_imputation_var.set(bool(data.get('enable_imputation', False)))
                 if hasattr(self, 'imputation_method_var') and 'imputation_method' in data:
@@ -901,6 +910,50 @@ class StatisticsTab(BaseTab):
             font=('Arial', 8, 'italic'),
             fg='#555'
         ).pack(anchor='w', padx=5, pady=(0, 5))
+
+        # Step 4a: Imputation before normalization (optional)
+        imputation_before_frame = tk.LabelFrame(
+            step4_frame,
+            text='Step 4a: Optional Pre-Normalization Imputation',
+            bg='#f0f0f0'
+        )
+        imputation_before_frame.pack(fill='x', padx=5, pady=(6, 4))
+
+        self.enable_imputation_before_var = tk.BooleanVar(value=False)
+        self.imputation_before_method_var = tk.StringVar(value='half_min')
+        self.imputation_before_knn_neighbors_var = tk.StringVar(value='5')
+
+        self.enable_imputation_before_var.trace_add('write', lambda *a: self._stats_config_changed(log=f"Pre-normalization imputation: {'on' if self.enable_imputation_before_var.get() else 'off'}"))
+        self.imputation_before_method_var.trace_add('write', lambda *a: self._stats_config_changed())
+        self.imputation_before_knn_neighbors_var.trace_add('write', lambda *a: self._stats_config_changed())
+
+        imp_before_frame = tk.Frame(imputation_before_frame, bg='#f0f0f0')
+        imp_before_frame.pack(fill='x', padx=5, pady=(4, 2))
+        tk.Checkbutton(imp_before_frame, text='Imputation Before Normalization', variable=self.enable_imputation_before_var, bg='#f0f0f0').pack(side='left')
+        imp_before_method_label = tk.Label(imp_before_frame, text='Method:', bg='#f0f0f0', font=('Arial', 8))
+        imp_before_method_label.pack(side='left', padx=(8, 3))
+        self.imputation_before_method_combo = ttk.Combobox(
+            imp_before_frame,
+            textvariable=self.imputation_before_method_var,
+            values=['half_min', 'median_per_group', 'median_global', 'knn'],
+            width=16,
+            state='readonly'
+        )
+        self.imputation_before_method_combo.pack(side='left')
+        self.knn_k_before_label = tk.Label(imp_before_frame, text='KNN k:', bg='#f0f0f0', font=('Arial', 8))
+        self.knn_k_before_label.pack(side='left', padx=(8, 3))
+        self.knn_k_before_entry = tk.Entry(imp_before_frame, textvariable=self.imputation_before_knn_neighbors_var, width=4)
+        self.knn_k_before_entry.pack(side='left')
+
+        self._create_tooltip(
+            imp_before_method_label,
+            "Pre-normalization imputation method:\n"
+            "- half_min: fills missing with half of row minimum positive value\n"
+            "- median_per_group: fills using row-wise median positive value\n"
+            "- median_global: fills using one global median positive value\n"
+            "- knn: multivariate KNN imputation\n\n"
+            "This runs BEFORE normalization to complete the dataset first."
+        )
 
         optional_proc_frame = tk.LabelFrame(
             step4_frame,
@@ -1580,13 +1633,13 @@ class StatisticsTab(BaseTab):
         self.fdr_scope_var.trace_add('write', lambda *a: self._on_fdr_scope_changed())
         fdr_radio_frame = tk.Frame(fdr_frame, bg='#f0f0f0')
         fdr_radio_frame.pack(fill='x', pady=(0, 5))
-        for txt, val in [('Per-Comparison', 'per-comparison'), ('Per-Metabolite', 'per-metabolite')]:
+        for txt, val in [('Per-Comparison', 'per-comparison'), ('Per-Feature', 'per-metabolite')]:
             tk.Radiobutton(fdr_radio_frame, text=txt, variable=self.fdr_scope_var, value=val, bg='#f0f0f0').pack(side='left', padx=2)
         
         # Add help text for FDR scope
         fdr_help = tk.Label(fdr_frame, text='⚠️ Only use when comparing 3+ groups \n (returns identical p-values with 2 groups)', 
                            bg='#fff3cd', fg='#856404', font=('Arial', 8), wraplength=450, justify='left', padx=5, pady=3)
-        # Don't pack initially - will be shown only when per-metabolite is selected
+        # Don't pack initially - will be shown only when per-feature is selected
         self.fdr_scope_warning = fdr_help  # Store reference for dynamic updates
         
         # Note: Group Order moved to Step 3 (left column)
@@ -3211,7 +3264,7 @@ class StatisticsTab(BaseTab):
         timing = self.filter_timing_var.get() if hasattr(self, 'filter_timing_var') else 'before'
         
         if timing == 'before':
-            text = ("Before Normalization: Metabolites with insufficient samples per group are zeroed out,\n"
+            text = ("Before Normalization: Features with insufficient samples per group are zeroed out,\n"
                    "then normalized. Rows with no valid data are removed. This is more conservative.")
         else:
             text = ("After Normalization: All data is normalized first. During statistical tests, metabolites\n"
@@ -3220,19 +3273,85 @@ class StatisticsTab(BaseTab):
         self.filter_timing_explanation.config(text=text)
 
     def _detect_sample_columns_for_optional_processing(self, df: pd.DataFrame, mode: str) -> list[str]:
-        """Detect sample columns in a merged dataframe for optional processing steps."""
+        """Detect sample columns in a merged dataframe for optional processing steps.
+        
+        NOTE: This is a fallback only. Verified sample columns should be passed directly
+        to _apply_optional_post_normalization_processing via the verified_sample_cols parameter.
+        """
         if mode == 'lipid':
             return [
                 col for col in df.columns
-                if (not self._is_lipid_feature_col(col)) and pd.api.types.is_numeric_dtype(df[col])
+                if (not self._is_lipid_feature_col(col))
+                and not is_statistics_metadata_col(col)
+                and pd.api.types.is_numeric_dtype(df[col])
             ]
 
         from main_script.metabolite_statistics_analysis import detect_feature_and_sample_columns
         _, sample_cols = detect_feature_and_sample_columns(df)
         return sample_cols
 
-    def _build_lipid_class_dataframe(self, df: pd.DataFrame) -> tuple[pd.DataFrame | None, dict]:
-        """Aggregate a lipid dataframe into one row per class using sample means."""
+    def _get_verified_sample_columns_for_current_mode(self, mode: str, polarity: str = None, class_level: bool = False) -> list[str]:
+        """Return verified sample columns for the current statistics mode.
+
+        Verified columns are the source of truth. Class-level columns are preferred
+        when available, otherwise the corresponding verified per-polarity sample
+        columns are used as a fallback.
+        """
+        verified_cols: list[str] = []
+
+        def extend_unique(values):
+            for value in values or []:
+                if value not in verified_cols:
+                    verified_cols.append(value)
+
+        if mode == 'lipid':
+            if polarity == 'positive':
+                if class_level:
+                    extend_unique(getattr(self, 'verified_pos_lipid_class_sample_cols', []))
+                extend_unique(getattr(self, 'verified_pos_lipid_sample_cols', []))
+            elif polarity == 'negative':
+                if class_level:
+                    extend_unique(getattr(self, 'verified_neg_lipid_class_sample_cols', []))
+                extend_unique(getattr(self, 'verified_neg_lipid_sample_cols', []))
+            else:
+                if class_level:
+                    extend_unique(getattr(self, 'verified_pos_lipid_class_sample_cols', []))
+                    extend_unique(getattr(self, 'verified_neg_lipid_class_sample_cols', []))
+                extend_unique(getattr(self, 'verified_pos_lipid_sample_cols', []))
+                extend_unique(getattr(self, 'verified_neg_lipid_sample_cols', []))
+        else:
+            if polarity == 'positive':
+                extend_unique(getattr(self, 'verified_pos_sample_cols', []))
+            elif polarity == 'negative':
+                extend_unique(getattr(self, 'verified_neg_sample_cols', []))
+            else:
+                extend_unique(getattr(self, 'verified_pos_sample_cols', []))
+                extend_unique(getattr(self, 'verified_neg_sample_cols', []))
+
+        return verified_cols
+
+    def _build_lipid_class_dataframe(self, df: pd.DataFrame, original_data: pd.DataFrame = None) -> tuple[pd.DataFrame | None, dict]:
+        """Aggregate a lipid dataframe into one row per class using sample means.
+        
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Processed lipid dataframe (may contain imputed values or filtered rows)
+        original_data : pd.DataFrame, optional
+            Original lipid data ONLY for negative-polarity classes in raw input phase.
+            Should be None when imputation is enabled to prevent imputed-only lipids
+            from being excluded during class aggregation.
+            
+            When provided (only for raw input), filters out imputed values from class
+            aggregation to prevent classes from appearing in polarities where they 
+            don't naturally exist.
+            
+            IMPORTANT: Do NOT pass original_data when imputation is enabled.
+            Imputation already handles preserving valid lipids for aggregation.
+            Passing original_data after imputation causes ~49 lipids to disappear,
+            leading to inconsistent row counts between imputation-disabled and 
+            imputation-enabled workflows (480 vs 431 lipids).
+        """
         if df is None or getattr(df, 'empty', True):
             return None, {'applied': False, 'reason': 'no_data'}
 
@@ -3261,7 +3380,7 @@ class StatisticsTab(BaseTab):
 
         try:
             from main_script.metabolites_visualization import aggregate_by_lipid_class
-            class_df = aggregate_by_lipid_class(df, sample_cols, class_col=class_col)
+            class_df = aggregate_by_lipid_class(df, sample_cols, class_col=class_col, original_data=original_data)
         except Exception as e:
             return None, {'applied': False, 'reason': f'aggregation_failed: {e}', 'class_column': class_col}
 
@@ -3290,8 +3409,124 @@ class StatisticsTab(BaseTab):
             'collapsed_rows': int(collapsed_rows),
         }
 
-    def _apply_optional_post_normalization_processing(self, combined_df: pd.DataFrame, mode: str, apply_imputation_prefilter: bool = False) -> tuple[pd.DataFrame, dict]:
-        """Apply optional variability filtering, imputation, and PCA outlier removal."""
+    def _export_pre_normalization_debug_workbook(self, raw_exports: dict) -> str | None:
+        """Write a temporary workbook with pre-normalization lipid-ion and lipid-class sheets."""
+        if not raw_exports:
+            return None
+
+        try:
+            from datetime import datetime
+            import shutil
+
+            backup_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'logs'))
+            os.makedirs(backup_dir, exist_ok=True)
+
+            export_dir = None
+            if hasattr(self, 'stats_results_folder') and self.stats_results_folder.get():
+                candidate_dir = os.path.abspath(self.stats_results_folder.get())
+                if os.path.isdir(candidate_dir):
+                    export_dir = candidate_dir
+
+            if export_dir is None:
+                input_path = None
+                for attr_name in ['annotated_metabolites_excel_path', 'id_annotated_excel_path', 'annotated_ids_excel_path']:
+                    candidate = getattr(self, attr_name, None)
+                    if candidate:
+                        input_path = candidate
+                        break
+                if input_path:
+                    export_dir = os.path.dirname(os.path.abspath(input_path))
+
+            if export_dir is None:
+                export_dir = backup_dir
+
+            os.makedirs(export_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            export_path = os.path.join(export_dir, f'pre_normalization_raw_debug_{timestamp}.xlsx')
+            backup_path = os.path.join(backup_dir, f'pre_normalization_raw_debug_{timestamp}.xlsx')
+
+            summary_rows = []
+            with pd.ExcelWriter(export_path, engine='openpyxl') as writer:
+                for polarity in ('positive', 'negative'):
+                    payload = raw_exports.get(polarity) or {}
+                    ions_df = payload.get('ions')
+                    ions_input_df = payload.get('ions_input')
+                    class_df = payload.get('class')
+                    class_input_df = payload.get('class_input')
+                    imputed_df = payload.get('imputed')
+
+                    if ions_df is not None and not getattr(ions_df, 'empty', True):
+                        sheet_name = f'{polarity.capitalize()}_LipidIons'
+                        ions_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        summary_rows.append({
+                            'Polarity': polarity.capitalize(),
+                            'Sheet': sheet_name,
+                            'Type': 'LipidIons',
+                            'Rows': int(len(ions_df)),
+                            'Stage': 'Filtered before imputation/normalization'
+                        })
+
+                    if ions_input_df is not None and not getattr(ions_input_df, 'empty', True):
+                        summary_rows.append({
+                            'Polarity': polarity.capitalize(),
+                            'Sheet': f'{polarity.capitalize()}_LipidIons_Input',
+                            'Type': 'LipidIons',
+                            'Rows': int(len(ions_input_df)),
+                            'Stage': 'Before pre-normalization filtering'
+                        })
+
+                    if class_df is not None and not getattr(class_df, 'empty', True):
+                        sheet_name = f'{polarity.capitalize()}_LipidClass'
+                        class_df.to_excel(writer, sheet_name=sheet_name, index=False)
+                        summary_rows.append({
+                            'Polarity': polarity.capitalize(),
+                            'Sheet': sheet_name,
+                            'Type': 'LipidClass',
+                            'Rows': int(len(class_df)),
+                            'Stage': 'Created before normalization'
+                        })
+
+                    if class_input_df is not None and not getattr(class_input_df, 'empty', True):
+                        summary_rows.append({
+                            'Polarity': polarity.capitalize(),
+                            'Sheet': f'{polarity.capitalize()}_LipidClass_Input',
+                            'Type': 'LipidClass',
+                            'Rows': int(len(class_input_df)),
+                            'Stage': 'Class built from unfiltered input'
+                        })
+
+                    if imputed_df is not None and not getattr(imputed_df, 'empty', True):
+                        summary_rows.append({
+                            'Polarity': polarity.capitalize(),
+                            'Sheet': f'{polarity.capitalize()}_Imputed',
+                            'Type': 'LipidIons',
+                            'Rows': int(len(imputed_df)),
+                            'Stage': 'After pre-normalization imputation'
+                        })
+
+                if summary_rows:
+                    pd.DataFrame(summary_rows).to_excel(writer, sheet_name='Summary', index=False)
+
+            if os.path.abspath(export_path) != os.path.abspath(backup_path):
+                try:
+                    shutil.copy2(export_path, backup_path)
+                except Exception as copy_error:
+                    self._thread_safe_log(f'⚠️ Could not create backup raw workbook copy: {copy_error}\n')
+
+            return export_path
+        except Exception as e:
+            self._thread_safe_log(f'⚠️ Temporary raw workbook export failed: {e}\n')
+            return None
+
+    def _apply_optional_post_normalization_processing(self, combined_df: pd.DataFrame, mode: str, apply_imputation_prefilter: bool = False, verified_sample_cols: list[str] = None) -> tuple[pd.DataFrame, dict]:
+        """Apply optional variability filtering, imputation, and PCA outlier removal.
+        
+        Parameters
+        ----------
+        verified_sample_cols : list[str], optional
+            Pre-verified sample columns to use. If provided, only these columns are used for processing.
+            If None, falls back to auto-detection (not recommended).
+        """
         from main_script.metabolite_statistics_analysis import (
             apply_variability_filter,
             apply_imputation,
@@ -3299,7 +3534,11 @@ class StatisticsTab(BaseTab):
         )
 
         processed_df = combined_df.copy()
-        sample_cols = self._detect_sample_columns_for_optional_processing(processed_df, mode)
+        # Use verified sample columns if provided, otherwise auto-detect (fallback only)
+        if verified_sample_cols:
+            sample_cols = [col for col in verified_sample_cols if col in processed_df.columns]
+        else:
+            sample_cols = self._detect_sample_columns_for_optional_processing(processed_df, mode)
         group_map_full = self._parse_group_assignments() if hasattr(self, 'sample_group_vars') else {}
         alias_map = getattr(self, '_current_sample_column_aliases', {}) or {}
         group_map = {}
@@ -3376,9 +3615,14 @@ class StatisticsTab(BaseTab):
                     "  • Imputation pre-filter skipped: incomplete/absent group assignments for current sample columns.\n"
                 )
             else:
-                self._thread_safe_log(
-                    "  • Imputation pre-filter: already applied before normalization.\n"
-                )
+                if self._is_imputation_before_normalization_enabled():
+                    self._thread_safe_log(
+                        "  • Imputation pre-filter: already applied before normalization.\n"
+                    )
+                else:
+                    self._thread_safe_log(
+                        "  • Imputation pre-filter: not applied before normalization; using verified sample columns only.\n"
+                    )
 
             imp_method = self.imputation_method_var.get().strip().lower() if hasattr(self, 'imputation_method_var') else 'half_min'
             try:
@@ -3390,6 +3634,8 @@ class StatisticsTab(BaseTab):
                 sample_cols,
                 method=imp_method,
                 knn_neighbors=knn_k,
+                debug=True,
+                log_fn=self._thread_safe_log,
             )
             report['imputation'] = imp_report
             self._thread_safe_log(
@@ -4468,6 +4714,13 @@ class StatisticsTab(BaseTab):
         except Exception:
             return False
 
+    def _is_imputation_before_normalization_enabled(self) -> bool:
+        """Return whether pre-normalization imputation (Step 4a) is enabled."""
+        try:
+            return bool(self.enable_imputation_before_var.get()) if hasattr(self, 'enable_imputation_before_var') else False
+        except Exception:
+            return False
+
     def _get_imputation_min_group_percent(self) -> float:
         """Return imputation pre-filter threshold (% non-missing per group)."""
         try:
@@ -4781,7 +5034,7 @@ class StatisticsTab(BaseTab):
                 "3. Click 'Done' to save assignments\n"
                 "4. Return here and run normalization\n\n"
                 "⚠️ Pre-normalization filtering requires group assignments\n"
-                "to remove metabolites with insufficient replicates per group.\n"
+                "to remove features with insufficient replicates per group.\n"
                 "This is critical for accurate statistical results.\n\n"
                 "Please configure groups before proceeding."
             )
@@ -5053,6 +5306,7 @@ class StatisticsTab(BaseTab):
         
         # Process each polarity separately with proper column cleaning
         normalized_frames = []
+        raw_pre_normalization_exports = {}
         norm_method = self.stat_norm_method.get()
         optional_4b_enabled = any([
             bool(self.enable_variability_filter_var.get()) if hasattr(self, 'enable_variability_filter_var') else False,
@@ -5064,6 +5318,9 @@ class StatisticsTab(BaseTab):
         # Initialize individual polarity storage
         normalized_positive_df = None
         normalized_negative_df = None
+        raw_positive_class_df = None
+        raw_negative_class_df = None
+        class_column_mappings = {}
         
         step_index = 2
         for polarity, df in [('positive', pos_df), ('negative', neg_df)]:
@@ -5188,6 +5445,9 @@ class StatisticsTab(BaseTab):
                         elif orig_col in full_assignments:
                             temp_group_map[orig_col] = full_assignments[orig_col]
             
+            # Snapshot the input before any pre-normalization filtering or imputation.
+            raw_input_ions_df = df.reset_index(drop=True).copy()
+
             # Workflow order when imputation is enabled:
             # 1) filtering, 2) normalization, 3) variance filter, 4) imputation, 5) PCA.
             if self._is_imputation_enabled():
@@ -5269,7 +5529,7 @@ class StatisticsTab(BaseTab):
                     after = stats['after']
                     removed = stats['removed']
                     self._thread_safe_log(f'   • {grp} (n={total_samples}, threshold={threshold}):\n')
-                    self._thread_safe_log(f'     - {after} metabolites retained')
+                    self._thread_safe_log(f'     - {after} features retained')
                     if removed > 0:
                         self._thread_safe_log(f' ({removed} removed)')
                     self._thread_safe_log(f'\n')
@@ -5286,8 +5546,8 @@ class StatisticsTab(BaseTab):
                 rows_removed = rows_before - rows_after
                 
                 if rows_removed > 0:
-                    self._thread_safe_log(f'🗑️  Removed {rows_removed} metabolites with no valid data across all groups.\n')
-                    self._thread_safe_log(f'   Remaining: {rows_after} metabolites\n')
+                    self._thread_safe_log(f'🗑️  Removed {rows_removed} features with no valid data across all groups.\n')
+                    self._thread_safe_log(f'   Remaining: {rows_after} features\n')
                 
                 self._thread_safe_log(f'{label}: Pre-normalization filtering complete.\n')
             elif filter_timing == 'after':
@@ -5315,6 +5575,58 @@ class StatisticsTab(BaseTab):
                         if len(missing) > 5:
                             self._thread_safe_log(f' ... and {len(missing)-5} more')
                         self._thread_safe_log(f'\n')
+
+            # Capture the filtered pre-imputation state for debugging.
+            raw_filtered_ions_df = df.reset_index(drop=True).copy()
+
+            raw_pre_normalization_exports[polarity] = {
+                'ions_input': raw_input_ions_df,
+                'ions': raw_filtered_ions_df,
+                'class_input': None,
+                'class': None,
+                'imputed': None,
+            }
+            
+            # Store raw filtered ion tables for Step 7 (class grouping will happen AFTER dedup and split)
+            if mode == 'lipid':
+                if polarity == 'positive':
+                    raw_positive_class_df = raw_filtered_ions_df.reset_index(drop=True).copy()
+                elif polarity == 'negative':
+                    raw_negative_class_df = raw_filtered_ions_df.reset_index(drop=True).copy()
+            
+            # Apply pre-normalization imputation if enabled
+            if self._is_imputation_before_normalization_enabled():
+                from main_script.metabolite_statistics_analysis import apply_imputation
+                try:
+                    imp_method = self.imputation_before_method_var.get().strip().lower() if hasattr(self, 'imputation_before_method_var') else 'half_min'
+                    try:
+                        knn_k = int(self.imputation_before_knn_neighbors_var.get()) if hasattr(self, 'imputation_before_knn_neighbors_var') else 5
+                    except Exception:
+                        knn_k = 5
+                    
+                    self._thread_safe_progress_step(step_index, total_steps, f"Imputing missing values BEFORE normalization ({label})...")
+                    self._thread_safe_log(f'\n🔧 Applying pre-normalization imputation ({label})...\n')
+                    self._thread_safe_log(f'   Method: {imp_method}\n')
+                    
+                    # Apply imputation to individual data
+                    df, imp_report = apply_imputation(
+                        df,
+                        sample_cols,
+                        method=imp_method,
+                        knn_neighbors=knn_k,
+                        debug=True,
+                        log_fn=self._thread_safe_log,
+                    )
+                    raw_pre_normalization_exports[polarity]['imputed'] = df.reset_index(drop=True).copy()
+                    self._thread_safe_log(
+                        f"   ✅ Individual data imputation: filled {imp_report.get('imputed_cells', 0)} cells; "
+                        f"missing_after={imp_report.get('missing_after', 'NA')}; "
+                        f"zeros_after={imp_report.get('zeros_after', 'NA')}\n"
+                    )
+                except Exception as e:
+                    self._thread_safe_log(f'⚠️ Pre-normalization imputation failed: {e}\n')
+
+            # Ion normalization happens next (class already created from raw filtered data above)
             
             # Normalize the data
             try:
@@ -5388,6 +5700,10 @@ class StatisticsTab(BaseTab):
                     is_feature_name=is_feature_name,
                     qc_sample_cols=qc_sample_cols
                 )
+                
+                # Apply same normalization to class data if it exists
+                # DEFERRED: Class normalization will happen after merge/split workflow
+                # Only normalize class data if NOT in lipid mode (metabolites normalize here)
             except Exception as e:
                 messagebox.showerror('Normalization Error', f'{label} failed: {e}')
                 return
@@ -5395,6 +5711,7 @@ class StatisticsTab(BaseTab):
             
             # Rename sample columns to cleaned names BEFORE normality testing
             rename_dict = {orig: clean for orig, clean in column_mapping.items()}
+            class_column_mappings[polarity] = rename_dict.copy()
             norm_df = norm_df.rename(columns=rename_dict)
             cleaned_sample_cols = [rename_dict[col] for col in sample_cols]
             self._current_sample_column_aliases = rename_dict.copy()
@@ -5411,13 +5728,14 @@ class StatisticsTab(BaseTab):
             if optional_4b_enabled:
                 norm_df, pol_report = self._apply_optional_post_normalization_processing(
                     norm_df.reset_index(drop=True),
-                    mode
+                    mode,
+                    verified_sample_cols=cleaned_sample_cols
                 )
                 polarity_processing_reports[polarity] = pol_report
                 cleaned_sample_cols = [c for c in cleaned_sample_cols if c in norm_df.columns]
             
             # Perform normality tests (Shapiro-Wilk only) after normalization
-            # Tests PER METABOLITE across all samples, not per sample
+            # Tests PER FEATURE across all samples, not per sample
             # QQ plots will be generated during export only (max 8 plots)
             if norm_method != 'none':
                 try:
@@ -5435,8 +5753,8 @@ class StatisticsTab(BaseTab):
                         vals = vals.dropna()
                         return vals[vals != 0]
                     
-                    # Test each metabolite across all sample columns
-                    # Find metabolite ID column
+                    # Test each feature across all sample columns
+                    # Find feature ID column
                     metabolite_id_col = None
                     for col_name in ['Name', 'Metabolite', 'Feature ID', 'metabolite_id']:
                         if col_name in norm_df.columns:
@@ -5446,9 +5764,9 @@ class StatisticsTab(BaseTab):
                     # Determine sample columns to use for testing
                     test_sample_cols = cleaned_sample_cols
                     
-                    # Store metabolite indices and results for QQ plot filtering
-                    normal_metabolites = []  # Will store (idx, metabolite_id, values)
-                    not_normal_metabolites = []  # Will store (idx, metabolite_id, values)
+                    # Store feature indices and results for QQ plot filtering
+                    normal_metabolites = []  # Will store (idx, feature_id, values)
+                    not_normal_metabolites = []  # Will store (idx, feature_id, values)
                     
                     total_metabolites = len(norm_df)
                     callback_freq = max(1, total_metabolites // 100)
@@ -5461,9 +5779,9 @@ class StatisticsTab(BaseTab):
                         if metabolite_id_col and metabolite_id_col in norm_df.columns:
                             metabolite_id = row[metabolite_id_col]
                         else:
-                            metabolite_id = f'Metabolite_{idx}'
+                            metabolite_id = f'Feature_{idx}'
                         
-                        # Get values for this metabolite across all samples
+                        # Get values for this feature across all samples
                         vals_list = []
                         for col in test_sample_cols:
                             if col in norm_df.columns:
@@ -5569,11 +5887,13 @@ class StatisticsTab(BaseTab):
             # Store individual polarity DataFrames (without Polarity_Source column)
             if polarity == 'positive':
                 normalized_positive_df = norm_df.copy()
+                # NOTE: Class storage deferred - will store after merge/split workflow for lipids
                 # Preserve current ordering here; do not resort by Area so GUI
                 # doesn't override the chosen representative ordering upstream.
                 # (Ordering will be applied after deduplication if desired.)
             elif polarity == 'negative':
                 normalized_negative_df = norm_df.copy()
+                # NOTE: Class storage deferred - will store after merge/split workflow for lipids
                 # Preserve current ordering here; do not resort by Area.
             
             # Add polarity indicator for tracking in merged data
@@ -5769,230 +6089,307 @@ class StatisticsTab(BaseTab):
 
         class_generation_report = {
             'applied': False,
-            'source': 'disabled',
+            'source': 'post_normalization_polarity_classes',
             'positive': {'applied': False},
             'negative': {'applied': False},
             'merged': {'applied': False},
         }
 
-        # Process lipid class DataFrames if in lipid mode
-        if mode == 'lipid' and self.use_lipid_class_sheet_backend:
-            self._thread_safe_log("Processing lipid class data...\n")
-            normalized_pos_class_df = None
-            normalized_neg_class_df = None
-            
-            # Get class DataFrames from temporary storage
-            pos_class_df = getattr(self, '_current_pos_class_df', None)
-            neg_class_df = getattr(self, '_current_neg_class_df', None)
-            
-            for class_polarity, class_df in [('positive', pos_class_df), ('negative', neg_class_df)]:
-                if class_df is None:
-                    continue
-                
-                class_label = f'{class_polarity.capitalize()} Class'
-                
-                # Detect sample columns for class data (Class/Lipid_Class is the only feature column)
-                # Check which identifier column exists
-                class_id_col = None
-                for candidate in ['Class', 'Lipid_Class', 'Class_name']:
-                    if candidate in class_df.columns:
-                        class_id_col = candidate
-                        break
-                
-                if not class_id_col:
-                    self._thread_safe_log(f'{class_label}: No Class/Lipid_Class column found, skipping.\n')
-                    continue
-                
-                class_feature_cols = [class_id_col]
-                # Also add Class_name if it exists and wasn't already used as ID
-                if 'Class_name' in class_df.columns and 'Class_name' not in class_feature_cols:
-                    class_feature_cols.append('Class_name')
-                
-                class_sample_cols = []
-                for col in class_df.columns:
-                    if col not in class_feature_cols:
-                        try:
-                            if self._is_lipid_feature_col(col):
-                                continue
-                        except Exception:
-                            pass
-                        if pd.api.types.is_numeric_dtype(class_df[col]):
-                            class_sample_cols.append(col)
-                
-                if not class_sample_cols:
-                    self._thread_safe_log(f'{class_label}: No sample columns found, skipping.\n')
-                    continue
-                
-                self._thread_safe_log(f'{class_label}: {len(class_sample_cols)} sample cols detected.\n')
-                
-                # Clean and normalize class data
-                try:
-                    class_column_mapping = clean_sample_column_names(class_sample_cols, class_polarity)
-                    class_norm_df = normalize_dataframe(class_df, class_sample_cols, norm_method)
-                    class_rename_dict = {orig: clean for orig, clean in class_column_mapping.items()}
-                    class_norm_df = class_norm_df.rename(columns=class_rename_dict)
-                    
-                    if class_polarity == 'positive':
-                        normalized_pos_class_df = class_norm_df.reset_index(drop=True)
-                    else:
-                        normalized_neg_class_df = class_norm_df.reset_index(drop=True)
-                    
-                    self._thread_safe_log(f'{class_label}: Normalized {len(class_norm_df)} rows.\n')
-                except Exception as e:
-                    self._thread_safe_log(f'{class_label}: Normalization error - {e}\n')
-            
-            # Merge the normalized class frames
-            if normalized_pos_class_df is not None or normalized_neg_class_df is not None:
-                class_frames = []
-                if normalized_pos_class_df is not None:
-                    class_frames.append(normalized_pos_class_df)
-                if normalized_neg_class_df is not None:
-                    class_frames.append(normalized_neg_class_df)
-                
-                combined_class = pd.concat(class_frames, ignore_index=True)
-                
-                # For class data: Create Area (Max.) column as sum of all numeric columns, sort descending, then deduplicate
-                numeric_cols = []
-                for col in combined_class.columns:
-                    # Exclude canonical lipid feature columns from numeric aggregation
-                    try:
-                        if self._is_lipid_feature_col(col):
-                            continue
-                    except Exception:
-                        pass
-                    if pd.api.types.is_numeric_dtype(combined_class[col]) and col != 'Lipid_Class':
-                        numeric_cols.append(col)
-                
-                if numeric_cols:
-                    combined_class['Area (Max.)'] = combined_class[numeric_cols].sum(axis=1)
-                    self._thread_safe_log(f'Created Area (Max.) column for class data as sum of {len(numeric_cols)} numeric columns.\n')
-                    
-                    # Sort by Area (Max.) descending
-                    combined_class = combined_class.sort_values('Area (Max.)', ascending=False).reset_index(drop=True)
-                    self._thread_safe_log('Sorted combined class data by Area (Max.) descending.\n')
-                
-                # Remove duplicates based on Lipid_Class
-                if 'Lipid_Class' in combined_class.columns:
-                    before = len(combined_class)
-                    combined_class = combined_class.drop_duplicates(subset=['Lipid_Class'], keep='first')
-                    removed = before - len(combined_class)
-                    self.stats_log.insert(tk.END, f'Removed {removed} duplicate Lipid_Class rows (kept first occurrence).\n')
-                
-                # Remove Area (Max.) column after deduplication
-                if 'Area (Max.)' in combined_class.columns:
-                    combined_class = combined_class.drop(columns=['Area (Max.)'])
-                    self._thread_safe_log('Removed Area (Max.) column after deduplication.\n')
-                
-                # Move Lipid_Class to first column
-                if 'Lipid_Class' in combined_class.columns:
-                    # Move Lipid_Class to first column
-                    cols = combined_class.columns.tolist()
-                    cols.insert(0, cols.pop(cols.index('Lipid_Class')))
-                    combined_class = combined_class[cols]
-                    self._thread_safe_log('Moved Lipid_Class to first column.\n')
-                
-                # Store combined class results
-                self.normalized_combined_class_df = combined_class.reset_index(drop=True)
-                self._thread_safe_log(f'Stored combined class DataFrame: {len(combined_class)} rows.\n')
-            
-            # Store class results
-            if normalized_pos_class_df is not None:
-                # Move Lipid_Class to first column for positive class
-                if 'Lipid_Class' in normalized_pos_class_df.columns:
-                    cols = normalized_pos_class_df.columns.tolist()
-                    cols.insert(0, cols.pop(cols.index('Lipid_Class')))
-                    normalized_pos_class_df = normalized_pos_class_df[cols]
-                self.normalized_positive_class_df = normalized_pos_class_df
-            
-            if normalized_neg_class_df is not None:
-                # Move Lipid_Class to first column for negative class
-                if 'Lipid_Class' in normalized_neg_class_df.columns:
-                    cols = normalized_neg_class_df.columns.tolist()
-                    cols.insert(0, cols.pop(cols.index('Lipid_Class')))
-                    normalized_neg_class_df = normalized_neg_class_df[cols]
-                self.normalized_negative_class_df = normalized_neg_class_df
-            
-            # Clean up temporary storage
-            if hasattr(self, '_current_pos_class_df'):
-                delattr(self, '_current_pos_class_df')
-            if hasattr(self, '_current_neg_class_df'):
-                delattr(self, '_current_neg_class_df')
-
-        elif mode == 'lipid':
-            # Default path: derive class outputs from the normalized positive/negative data.
-            self._thread_safe_log("Deriving lipid class data from normalized polarity datasets...\n")
+        # Process lipid class DataFrames if in lipid mode.
+        # Class creation is intentionally deferred to this stage, after polarity
+        # normalization and optional post-normalization processing have completed.
+        if mode == 'lipid':
             self.normalized_positive_class_df = None
             self.normalized_negative_class_df = None
             self.normalized_combined_class_df = None
 
-            class_generation_report = {
-                'applied': False,
-                'source': 'derived_post_step4',
-                'positive': {'applied': False},
-                'negative': {'applied': False},
-                'merged': {'applied': False},
-            }
+            self._thread_safe_log("\n🧪 Step 7: Create final class output from deduplicated lipid ions...\n")
+            self._thread_safe_log("   1) Merge raw positive and negative ions with Polarity column.\n")
+            self._thread_safe_log("   2) Create Max_Area, sort descending, deduplicate by Lipid ID.\n")
+            self._thread_safe_log("   3) Split deduplicated ions back into Positive/Negative.\n")
+            self._thread_safe_log("   4) Group each polarity into class tables.\n")
+            self._thread_safe_log("   5) Normalize each polarity's class tables.\n")
+            self._thread_safe_log("   6) Merge normalized class tables using MEAN for duplicate classes.\n")
 
-            if self.normalized_positive_df is not None:
-                pos_class_df, pos_class_report = self._build_lipid_class_dataframe(self.normalized_positive_df)
-                self.normalized_positive_class_df = pos_class_df
-                class_generation_report['positive'] = pos_class_report
-                class_generation_report['applied'] = class_generation_report['applied'] or bool(pos_class_report.get('applied', False))
-                if pos_class_report.get('applied'):
-                    self._thread_safe_log(
-                        f"  • Positive class sheet derived from normalized Positive data: {pos_class_report.get('class_count', 0)} classes "
-                        f"from {pos_class_report.get('valid_class_rows', 0)} valid class rows "
-                        f"({pos_class_report.get('collapsed_rows', 0)} rows collapsed by class label).\n"
-                    )
+            # Capture and freeze settings used for class processing to match ion workflow.
+            step7_pre_imputation_enabled = self._is_imputation_before_normalization_enabled()
+            step7_post_processing_enabled = bool(optional_4b_enabled)
+            step7_post_imputation_enabled = bool(self.enable_imputation_var.get()) if hasattr(self, 'enable_imputation_var') else False
+
+            step7_pre_imp_method = self.imputation_before_method_var.get().strip().lower() if hasattr(self, 'imputation_before_method_var') else 'half_min'
+            try:
+                step7_pre_knn_k = int(self.imputation_before_knn_neighbors_var.get()) if hasattr(self, 'imputation_before_knn_neighbors_var') else 5
+            except Exception:
+                step7_pre_knn_k = 5
+
+            step7_post_imp_method = self.imputation_method_var.get().strip().lower() if hasattr(self, 'imputation_method_var') else 'half_min'
+            try:
+                step7_post_knn_k = int(self.knn_neighbors_var.get()) if hasattr(self, 'knn_neighbors_var') else 5
+            except Exception:
+                step7_post_knn_k = 5
+
+            self._thread_safe_log(
+                "  ℹ️ Class settings inherited from ion pipeline:\n"
+                f"      - Pre-normalization imputation (Step 4a): {'ENABLED' if step7_pre_imputation_enabled else 'DISABLED'}"
+                + (f" [method={step7_pre_imp_method}, knn={step7_pre_knn_k}]\n" if step7_pre_imputation_enabled else "\n")
+                + f"      - Post-normalization processing (Step 4b): {'ENABLED' if step7_post_processing_enabled else 'DISABLED'}\n"
+                + f"      - Post-normalization imputation (Step 4b): {'ENABLED' if step7_post_imputation_enabled else 'DISABLED'}"
+                + (f" [method={step7_post_imp_method}, knn={step7_post_knn_k}]\n" if step7_post_imputation_enabled else "\n")
+            )
+
+            # Step 1: Merge raw ion tables with Polarity column
+            ion_frames = []
+            for polarity, raw_ion_df in [('positive', raw_positive_class_df), ('negative', raw_negative_class_df)]:
+                if raw_ion_df is None or raw_ion_df.empty:
+                    continue
+                temp_ion_df = raw_ion_df.reset_index(drop=True).copy()
+                temp_ion_df['Polarity'] = polarity.capitalize()
+                ion_frames.append(temp_ion_df)
+                self._thread_safe_log(f"  • {polarity.capitalize()}: {len(temp_ion_df)} raw ion rows ready for merge\n")
+
+            if not ion_frames:
+                self._thread_safe_log("No ion data to process.\n")
+            else:
+                # Step 1: Merge ions
+                combined_ions = pd.concat(ion_frames, ignore_index=True)
+                
+                # Step 2: Create Max_Area, sort, deduplicate at ion level
+                ion_id_col = self._get_verified_id_column(combined_ions)
+                if ion_id_col not in combined_ions.columns:
+                    for candidate in ['LipidID', 'Lipid_ID', 'LipID', 'ID', 'Feature ID']:
+                        if candidate in combined_ions.columns:
+                            ion_id_col = candidate
+                            break
+
+                numeric_cols = [
+                    col for col in combined_ions.columns
+                    if col not in {ion_id_col, 'Polarity', 'Max_Area', 'Area (Max.)'}
+                    and pd.api.types.is_numeric_dtype(combined_ions[col])
+                ]
+
+                if numeric_cols:
+                    combined_ions['Max_Area'] = combined_ions[numeric_cols].sum(axis=1)
+                    self._thread_safe_log(f"  • Max_Area created from {len(numeric_cols)} numeric ion columns\n")
+
+                if 'Max_Area' in combined_ions.columns:
+                    combined_ions = combined_ions.sort_values('Max_Area', ascending=False).reset_index(drop=True)
+                    self._thread_safe_log(f"  • Sorted {len(combined_ions)} ions descending by Max_Area\n")
+
+                if ion_id_col in combined_ions.columns:
+                    before = len(combined_ions)
+                    combined_ions = combined_ions.drop_duplicates(subset=[ion_id_col], keep='first')
+                    removed = before - len(combined_ions)
+                    self._thread_safe_log(f"  • Deduped ions by {ion_id_col}: removed {removed} duplicate rows\n")
                 else:
-                    self._thread_safe_log(f"  • Positive class generation skipped: {pos_class_report.get('reason', 'unknown')}.\n")
+                    self._thread_safe_log("  ⚠️ Could not find a Lipid ID column for ion deduplication; skipping dedup step.\n")
 
-            if self.normalized_negative_df is not None:
-                neg_class_df, neg_class_report = self._build_lipid_class_dataframe(self.normalized_negative_df)
-                self.normalized_negative_class_df = neg_class_df
-                class_generation_report['negative'] = neg_class_report
-                class_generation_report['applied'] = class_generation_report['applied'] or bool(neg_class_report.get('applied', False))
-                if neg_class_report.get('applied'):
-                    self._thread_safe_log(
-                        f"  • Negative class sheet derived from normalized Negative data: {neg_class_report.get('class_count', 0)} classes "
-                        f"from {neg_class_report.get('valid_class_rows', 0)} valid class rows "
-                        f"({neg_class_report.get('collapsed_rows', 0)} rows collapsed by class label).\n"
+                # Step 3: Split back to Positive and Negative ions
+                pos_ions_df = combined_ions[combined_ions['Polarity'].astype(str).str.lower() == 'positive'].copy() if 'Polarity' in combined_ions.columns else combined_ions.copy()
+                neg_ions_df = combined_ions[combined_ions['Polarity'].astype(str).str.lower() == 'negative'].copy() if 'Polarity' in combined_ions.columns else pd.DataFrame(columns=combined_ions.columns)
+
+                self._thread_safe_log(f"  • Split back into ions: Positive={len(pos_ions_df)}, Negative={len(neg_ions_df)}\n")
+
+                # Step 4: Group each polarity into class tables
+                pos_class_df = None
+                neg_class_df = None
+
+                if not pos_ions_df.empty:
+                    pos_class_df, pos_class_report = self._build_lipid_class_dataframe(pos_ions_df)
+                    if pos_class_df is not None and not pos_class_df.empty:
+                        self._thread_safe_log(f"  • Positive ions grouped into {len(pos_class_df)} classes\n")
+                    else:
+                        self._thread_safe_log(f"  ⚠️ Positive class grouping failed: {pos_class_report.get('reason', 'unknown')}\n")
+
+                if not neg_ions_df.empty:
+                    neg_class_df, neg_class_report = self._build_lipid_class_dataframe(neg_ions_df)
+                    if neg_class_df is not None and not neg_class_df.empty:
+                        self._thread_safe_log(f"  • Negative ions grouped into {len(neg_class_df)} classes\n")
+                    else:
+                        self._thread_safe_log(f"  ⚠️ Negative class grouping failed: {neg_class_report.get('reason', 'unknown')}\n")
+
+                # Step 5: Normalize each polarity's class tables (with imputation if enabled)
+                def _normalize_class_frame(class_df: pd.DataFrame, polarity: str) -> pd.DataFrame | None:
+                    if class_df is None or class_df.empty:
+                        return None
+
+                    # Identify sample columns (exclude n_lipids, feature columns, metadata)
+                    metadata_cols = {'Lipid_Class', 'Class', 'Class_name', 'Max_Area', 'Area (Max.)', 'n_lipids', 'n_lipid', 'CalcMz', 'BaseRt', 'Rt', 'MZ', 'Mz'}
+                    sample_cols = [
+                        col for col in class_df.columns
+                        if pd.api.types.is_numeric_dtype(class_df[col]) and col not in metadata_cols
+                    ]
+
+                    if not sample_cols:
+                        return class_df.copy()
+
+                    working_df = class_df.copy()
+
+                    # Step 4a: APPLY pre-normalization imputation if enabled.
+                    if step7_pre_imputation_enabled:
+                        try:
+                            from main_script.metabolite_statistics_analysis import apply_imputation
+                            
+                            self._thread_safe_log(f"    • {polarity.capitalize()} classes: Applying pre-normalization imputation ({step7_pre_imp_method}) to {len(class_df)} class rows...\n")
+                            working_df, imp_report = apply_imputation(
+                                working_df,
+                                sample_cols,
+                                method=step7_pre_imp_method,
+                                knn_neighbors=step7_pre_knn_k,
+                                debug=True,
+                                log_fn=self._thread_safe_log,
+                            )
+                            if imp_report:
+                                imputed_count = imp_report.get('imputed_count', 0)
+                                self._thread_safe_log(f"    ✅ {polarity.capitalize()} classes: Imputation complete ({imputed_count} values imputed)\n")
+                        except Exception as e:
+                            self._thread_safe_log(f"    ⚠️ Imputation failed for {polarity} classes: {e}\n")
+                    else:
+                        self._thread_safe_log(f"    • {polarity.capitalize()} classes: Pre-normalization imputation is disabled (Step 4a).\n")
+
+                    # APPLY NORMALIZATION
+                    is_feature_name = None
+                    qc_sample_cols = None
+                    if norm_method.lower() in ('is', 'internal_standard', 'istd'):
+                        if polarity == 'positive' and hasattr(self, 'verified_pos_lipid_assignments'):
+                            is_feature_name = self.verified_pos_lipid_assignments.get('Internal Standard')
+                        elif polarity == 'negative' and hasattr(self, 'verified_neg_lipid_assignments'):
+                            is_feature_name = self.verified_neg_lipid_assignments.get('Internal Standard')
+                    elif norm_method.lower() in ('loess_qc', 'loess', 'qc_correction'):
+                        if polarity == 'positive' and hasattr(self, 'verified_pos_lipid_assignments'):
+                            qc_sample_cols = self.verified_pos_lipid_assignments.get('_qc_columns')
+                        elif polarity == 'negative' and hasattr(self, 'verified_neg_lipid_assignments'):
+                            qc_sample_cols = self.verified_neg_lipid_assignments.get('_qc_columns')
+
+                    self._thread_safe_log(f"    • {polarity.capitalize()} classes: Normalizing with method '{norm_method}' ({len(sample_cols)} sample columns)...\n")
+                    normalized_df = normalize_dataframe(
+                        working_df,
+                        sample_cols,
+                        norm_method,
+                        is_feature_name=is_feature_name,
+                        qc_sample_cols=qc_sample_cols,
                     )
-                else:
-                    self._thread_safe_log(f"  • Negative class generation skipped: {neg_class_report.get('reason', 'unknown')}.\n")
+                    self._thread_safe_log(f"    ✅ {polarity.capitalize()} classes: Normalization complete\n")
 
-            if self.normalized_combined_df is not None:
-                merged_class_df, merged_class_report = self._build_lipid_class_dataframe(self.normalized_combined_df)
-                self.normalized_combined_class_df = merged_class_df
-                class_generation_report['merged'] = merged_class_report
-                class_generation_report['applied'] = class_generation_report['applied'] or bool(merged_class_report.get('applied', False))
-                if merged_class_report.get('applied'):
-                    self._thread_safe_log(
-                        f"  • Merged class sheet derived from normalized merged data: {merged_class_report.get('class_count', 0)} classes "
-                        f"from {merged_class_report.get('valid_class_rows', 0)} valid class rows "
-                        f"({merged_class_report.get('collapsed_rows', 0)} rows collapsed by class label).\n"
-                    )
+                    rename_map = class_column_mappings.get(polarity, {})
+                    if rename_map:
+                        normalized_df = normalized_df.rename(columns=rename_map)
 
-                    # Explain cross-polarity class overlap explicitly.
-                    pos_classes = set()
-                    neg_classes = set()
-                    if self.normalized_positive_class_df is not None and 'Lipid_Class' in self.normalized_positive_class_df.columns:
-                        pos_classes = set(self.normalized_positive_class_df['Lipid_Class'].dropna().astype(str))
-                    if self.normalized_negative_class_df is not None and 'Lipid_Class' in self.normalized_negative_class_df.columns:
-                        neg_classes = set(self.normalized_negative_class_df['Lipid_Class'].dropna().astype(str))
-
-                    if pos_classes or neg_classes:
-                        overlap = pos_classes.intersection(neg_classes)
-                        expected_unique = len(pos_classes.union(neg_classes))
+                    # Step 4b: run the same optional post-normalization pipeline used for ions.
+                    cleaned_sample_cols = [rename_map.get(col, col) for col in sample_cols] if rename_map else list(sample_cols)
+                    cleaned_sample_cols = [col for col in cleaned_sample_cols if col in normalized_df.columns]
+                    if step7_post_processing_enabled and cleaned_sample_cols:
                         self._thread_safe_log(
-                            f"    ↳ Class overlap summary: Positive={len(pos_classes)}, Negative={len(neg_classes)}, "
-                            f"shared={len(overlap)}, union={expected_unique}, merged={merged_class_report.get('class_count', 0)}.\n"
+                            f"    • {polarity.capitalize()} classes: Applying optional post-normalization processing (Step 4b) with {len(cleaned_sample_cols)} sample columns...\n"
                         )
+                        # Keep alias map aligned for group assignment resolution inside optional processing.
+                        self._current_sample_column_aliases = rename_map.copy() if rename_map else {}
+                        normalized_df, class_pol_report = self._apply_optional_post_normalization_processing(
+                            normalized_df.reset_index(drop=True),
+                            mode,
+                            verified_sample_cols=cleaned_sample_cols
+                        )
+                        imputation_summary = ((class_pol_report or {}).get('imputation') or {})
+                        if imputation_summary:
+                            self._thread_safe_log(
+                                f"    ✅ {polarity.capitalize()} classes: Step 4b complete; imputation filled {imputation_summary.get('imputed_cells', 0)} cells.\n"
+                            )
+                        else:
+                            self._thread_safe_log(f"    ✅ {polarity.capitalize()} classes: Step 4b complete.\n")
+                    elif step7_post_processing_enabled and not cleaned_sample_cols:
+                        self._thread_safe_log(
+                            f"    ⚠️ {polarity.capitalize()} classes: Step 4b enabled but no valid sample columns found after renaming.\n"
+                        )
+
+                    return normalized_df
+
+                self.normalized_positive_class_df = _normalize_class_frame(pos_class_df, 'positive')
+                self.normalized_negative_class_df = _normalize_class_frame(neg_class_df, 'negative')
+
+                # Step 6: Merge normalized class tables with special handling for n_lipids
+                final_class_frames = []
+                if self.normalized_positive_class_df is not None and not self.normalized_positive_class_df.empty:
+                    final_class_frames.append(self.normalized_positive_class_df)
+                if self.normalized_negative_class_df is not None and not self.normalized_negative_class_df.empty:
+                    final_class_frames.append(self.normalized_negative_class_df)
+
+                if final_class_frames:
+                    combined_class = pd.concat(final_class_frames, ignore_index=True)
+
+                    # Merge duplicate classes with special aggregation rules
+                    if 'Lipid_Class' in combined_class.columns:
+                        # Identify all column types
+                        feature_cols = {'CalcMz', 'BaseRt', 'Rt', 'MZ', 'Mz', 'Max_Area', 'Area (Max.)'}
+                        count_cols = {'n_lipids', 'n_lipid'}  # Count columns that should be summed
+                        
+                        # Build aggregation map
+                        agg_map = {}
+                        for col in combined_class.columns:
+                            if col == 'Lipid_Class':
+                                continue  # Skip the groupby column
+                            elif col in count_cols:
+                                # Sum count columns
+                                agg_map[col] = 'sum'
+                            elif col in feature_cols or not pd.api.types.is_numeric_dtype(combined_class[col]):
+                                # Use first for feature/metadata columns
+                                agg_map[col] = 'first'
+                            elif pd.api.types.is_numeric_dtype(combined_class[col]):
+                                # Use mean for actual sample columns
+                                agg_map[col] = 'mean'
+                        
+                        before = len(combined_class)
+                        combined_class = (
+                            combined_class
+                            .groupby('Lipid_Class', as_index=False, sort=False)
+                            .agg(agg_map)
+                        )
+                        merged = before - len(combined_class)
+                        if merged > 0:
+                            self._thread_safe_log(
+                                f"  • Class merge: Merged {merged} duplicates (same Lipid_Class from pos+neg)\n"
+                                f"      - MEAN aggregation for sample columns\n"
+                                f"      - SUM aggregation for n_lipids count column\n"
+                                f"      - FIRST aggregation for feature columns (CalcMz, BaseRt, etc.)\n"
+                            )
+
+                    # Reorder columns to put Lipid_Class first
+                    if 'Lipid_Class' in combined_class.columns:
+                        cols = combined_class.columns.tolist()
+                        cols.insert(0, cols.pop(cols.index('Lipid_Class')))
+                        combined_class = combined_class[cols]
+
+                    self.normalized_combined_class_df = combined_class.reset_index(drop=True)
+                    class_generation_report['applied'] = True
+                    class_generation_report['merged']['applied'] = True
+                    class_generation_report['merged']['class_count'] = len(combined_class)
+                    class_generation_report['source'] = 'deduplicated_ions_grouped_to_class_then_normalized'
+                    
+                    # Log summary
+                    pos_count = len(self.normalized_positive_class_df) if self.normalized_positive_class_df is not None and not self.normalized_positive_class_df.empty else 0
+                    neg_count = len(self.normalized_negative_class_df) if self.normalized_negative_class_df is not None and not self.normalized_negative_class_df.empty else 0
+                    total_before_merge = pos_count + neg_count
+                    
+                    # Build workflow description based on actual imputation settings
+                    workflow_steps = ['Ions', 'deduplicated', 'grouped']
+                    if step7_pre_imputation_enabled:
+                        workflow_steps.append('imputed (4a)')
+                    workflow_steps.append('normalized')
+                    if step7_post_imputation_enabled:
+                        workflow_steps.append('imputed (4b)')
+                    workflow_steps.append('merged (MEAN)')
+                    workflow_str = ' → '.join(workflow_steps)
+                    
+                    self._thread_safe_log(
+                        f"\n✅ Step 7 complete: Class workflow finished\n"
+                        f"  → Positive polarity: {pos_count} normalized classes\n"
+                        f"  → Negative polarity: {neg_count} normalized classes\n"
+                        f"  → Combined before merge: {total_before_merge} class rows\n"
+                        f"  → Final merged output: {len(combined_class)} unique lipid classes\n"
+                        f"  → Workflow: {workflow_str}\n"
+                    )
                 else:
-                    self._thread_safe_log(f"  • Merged class generation skipped: {merged_class_report.get('reason', 'unknown')}.\n")
-
-            self.class_generation_report = class_generation_report
-
+                    self._thread_safe_log("No normalized class data to merge.\n")
+        
+        # Store the class generation report
         self.class_generation_report = class_generation_report
         if not hasattr(self, 'optional_processing_report') or not isinstance(self.optional_processing_report, dict):
             self.optional_processing_report = {}
@@ -6014,6 +6411,16 @@ class StatisticsTab(BaseTab):
             self.stats_log.insert(tk.END, f'  • {summary}\n')
         self.stats_log.insert(tk.END, '✅ Normalization & merge complete with Area (Max.) priority and cleaned column names!\n')
         self.stats_log.see(tk.END)
+
+        raw_debug_path = self._export_pre_normalization_debug_workbook(raw_pre_normalization_exports)
+        if raw_debug_path:
+            self.last_raw_pre_normalization_export_path = raw_debug_path
+            self._thread_safe_log(f'🧪 Pre-normalization raw workbook saved to: {raw_debug_path}\n')
+            try:
+                backup_note = os.path.join(os.path.dirname(raw_debug_path), '..', 'logs')
+                self._thread_safe_log(f'🧪 Backup copy also written to logs folder when distinct from the selected output folder.\n')
+            except Exception:
+                pass
         
         # Hide progress bar
         self._thread_safe_progress_step(total_steps, total_steps, "Normalization complete")
@@ -6026,10 +6433,7 @@ class StatisticsTab(BaseTab):
         # Show completion popup and populate sample assignments
         messagebox.showinfo("Normalization Complete", 
                           f"Data normalization completed successfully!\n\n"
-                          f"• Processed data: {len(self.normalized_combined_df)} metabolites\n"
-                          f"• Applied normalization: {norm_method}\n"
-                          f"{optional_msg}"
-                          #f"• Area (Max.) priority preserved\n\n"
+                          f"• Processed data: {len(self.normalized_combined_df)} features\n"
                           f"⚠️ IMPORTANT NEXT STEPS:\n"
                           f"Click 'Run Statistics' or 'Run Stat with Covariate Adjustment' to:\n"
                           f"'Review group assignments' & 'perform statistical tests'")
@@ -6223,7 +6627,8 @@ class StatisticsTab(BaseTab):
         self.raw_normalized_combined_df = normalized_df.reset_index(drop=True)
         processed_combined_df, processing_report = self._apply_optional_post_normalization_processing(
             self.raw_normalized_combined_df,
-            self.statistics_data_mode.get() if hasattr(self, 'statistics_data_mode') else 'metabolite'
+            self.statistics_data_mode.get() if hasattr(self, 'statistics_data_mode') else 'metabolite',
+            verified_sample_cols=sample_cols
         )
         self.optional_processing_report = processing_report
         self.optional_processing_applied = bool(processing_report.get('applied', False))
@@ -6253,7 +6658,7 @@ class StatisticsTab(BaseTab):
                     if seq_idx % callback_freq == 0 or seq_idx == 1 or seq_idx == total_metabolites:
                         self._thread_safe_log(f'  Testing: {seq_idx}/{total_metabolites}\n')
                     
-                    metabolite_id = row[metabolite_id_col] if metabolite_id_col in normalized_df.columns else f'Metabolite_{idx}'
+                    metabolite_id = row[metabolite_id_col] if metabolite_id_col in normalized_df.columns else f'Feature_{idx}'
                     
                     # Get values across all samples
                     vals_list = []
@@ -6824,7 +7229,7 @@ class StatisticsTab(BaseTab):
                     self._thread_safe_log(f"  → Metabolites will be skipped if a group has <{min_percent}% non-zero values for that comparison\n")
                     self._thread_safe_log(f"  → Example: Group with 10 samples requires ≥{int(np.ceil(10 * min_percent / 100))} non-zero values\n")
                 else:
-                    self._thread_safe_log(f"  → Metabolites with <{min_required} non-zero values in a group will be skipped for that comparison\n")
+                    self._thread_safe_log(f"  → Features with <{min_required} non-zero values in a group will be skipped for that comparison\n")
             else:
                 self._thread_safe_log(f"  → Filtering was already applied before normalization\n")
             
@@ -7329,8 +7734,13 @@ class StatisticsTab(BaseTab):
                             if class_id_col is None:
                                 self._thread_safe_log(f"⚠️ Cannot find class ID column (Class, Lipid_Class, or Class_name). Skipping class analysis.\n")
                             else:
-                                # Get sample columns that exist in class data
-                                class_sample_cols = [c for c in sample_cols if c in class_df.columns]
+                                # Use verified class sample columns first; fall back to verified parent sample columns.
+                                class_sample_cols = [
+                                    c for c in self._get_verified_sample_columns_for_current_mode(mode, class_level=True)
+                                    if c in class_df.columns
+                                ]
+                                if not class_sample_cols:
+                                    class_sample_cols = [c for c in sample_cols if c in class_df.columns]
                                 
                                 # Filter to samples with group assignments
                                 class_included = [s for s in class_sample_cols if s in group_map]
@@ -7904,7 +8314,12 @@ class StatisticsTab(BaseTab):
                 if class_missing_cols:
                     self._thread_safe_log(f"⚠️ Warning: Some sample columns missing in class data: {class_missing_cols[:5]}...\n")
                     # Use only available sample columns
-                    class_sample_cols = [c for c in sample_cols if c in self.normalized_combined_class_df.columns]
+                    class_sample_cols = [
+                        c for c in self._get_verified_sample_columns_for_current_mode(mode, class_level=True)
+                        if c in self.normalized_combined_class_df.columns
+                    ]
+                    if not class_sample_cols:
+                        class_sample_cols = [c for c in sample_cols if c in self.normalized_combined_class_df.columns]
                     if not class_sample_cols:
                         self._thread_safe_log("❌ No matching sample columns in class data, skipping class statistics.\n")
                         self.statistical_test_results_class = {}
@@ -8491,20 +8906,23 @@ class StatisticsTab(BaseTab):
                 # Save class data if available (drop Area (Max.) if present)
                 if hasattr(self, 'normalized_combined_class_df') and self.normalized_combined_class_df is not None:
                     class_df = self.normalized_combined_class_df.copy()
-                    if 'Area (Max.)' in class_df.columns:
-                        class_df = class_df.drop(columns=['Area (Max.)'])
+                    drop_cols = [col for col in ['Area (Max.)', 'Max_Area'] if col in class_df.columns]
+                    if drop_cols:
+                        class_df = class_df.drop(columns=drop_cols)
                     class_df.to_excel(writer, sheet_name='Merged_Class', index=False)
                 
                 if hasattr(self, 'normalized_positive_class_df') and self.normalized_positive_class_df is not None:
                     pos_class_df = self.normalized_positive_class_df.copy()
-                    if 'Area (Max.)' in pos_class_df.columns:
-                        pos_class_df = pos_class_df.drop(columns=['Area (Max.)'])
+                    drop_cols = [col for col in ['Area (Max.)', 'Max_Area'] if col in pos_class_df.columns]
+                    if drop_cols:
+                        pos_class_df = pos_class_df.drop(columns=drop_cols)
                     pos_class_df.to_excel(writer, sheet_name='Positive_Class', index=False)
                 
                 if hasattr(self, 'normalized_negative_class_df') and self.normalized_negative_class_df is not None:
                     neg_class_df = self.normalized_negative_class_df.copy()
-                    if 'Area (Max.)' in neg_class_df.columns:
-                        neg_class_df = neg_class_df.drop(columns=['Area (Max.)'])
+                    drop_cols = [col for col in ['Area (Max.)', 'Max_Area'] if col in neg_class_df.columns]
+                    if drop_cols:
+                        neg_class_df = neg_class_df.drop(columns=drop_cols)
                     neg_class_df.to_excel(writer, sheet_name='Negative_Class', index=False)
                 
                 # Add normality test results if available (combined sheet)
@@ -9981,10 +10399,17 @@ class StatisticsTab(BaseTab):
             
             # 2. Deduplicate
             before = len(df)
-            df = df.drop_duplicates(subset=['Lipid_Class'], keep='first')
+            numeric_cols = [
+                col for col in df.columns
+                if col != 'Lipid_Class' and pd.api.types.is_numeric_dtype(df[col])
+            ]
+            non_numeric_cols = [col for col in df.columns if col not in numeric_cols + ['Lipid_Class']]
+            agg_map = {col: 'sum' for col in numeric_cols}
+            agg_map.update({col: 'first' for col in non_numeric_cols})
+            df = df.groupby('Lipid_Class', as_index=False, sort=False).agg(agg_map)
             removed = before - len(df)
             if removed:
-                self._thread_safe_log(f"Class Complete Results: removed {removed} duplicate Lipid_Class rows.\n")
+                self._thread_safe_log(f"Class Complete Results: merged {removed} duplicate Lipid_Class rows by summing numeric values.\n")
             # 3. Drop helpers
             if 'Area (Max.)' in df.columns:
                 df.drop(columns=['Area (Max.)'], inplace=True, errors='ignore')

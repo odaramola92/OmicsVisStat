@@ -110,7 +110,9 @@ class MetabolomicsMLAnalysis:
     
     def __init__(self, data_df: pd.DataFrame, group_assignments: Dict[str, str], 
                  feature_columns: List[str], metadata_columns: Optional[List[str]] = None,
-                 feature_id_col: Optional[str] = None):
+                 feature_id_col: Optional[str] = None,
+                 covariate_data: Optional[pd.DataFrame] = None,
+                 covariate_cols: Optional[List[str]] = None):
         """
         Initialize ML analysis.
         
@@ -125,6 +127,8 @@ class MetabolomicsMLAnalysis:
         self.group_assignments = group_assignments
         self.feature_columns = feature_columns
         self.metadata_columns = metadata_columns or []
+        self.covariate_data = covariate_data.copy() if isinstance(covariate_data, pd.DataFrame) else None
+        self.covariate_cols = list(covariate_cols or [])
         
         # Extract feature names (metabolite names) for feature importance display
         # Priority: 1) User-specified feature_id_col, 2) 'Name', 3) 'LipidIon', 4) generic Feature_N
@@ -143,9 +147,114 @@ class MetabolomicsMLAnalysis:
         self.results = {}
         
         logger.info(f"Initialized ML analysis with {len(feature_columns)} samples")
+
+    def _build_covariate_design_matrix(
+        self,
+        sample_names: List[str],
+        fit_state: Optional[Dict[str, Any]] = None
+    ) -> Tuple[Optional[pd.DataFrame], Optional[Dict[str, Any]]]:
+        """Build a numeric covariate matrix aligned to the requested samples."""
+        if self.covariate_data is None or not self.covariate_cols:
+            return None, fit_state
+
+        cov_df = self.covariate_data.reindex(sample_names)
+        available_cols = [col for col in self.covariate_cols if col in cov_df.columns]
+        if not available_cols:
+            return None, fit_state
+
+        missing_token = '__missing__'
+
+        if fit_state is None:
+            numeric_cols: List[str] = []
+            categorical_cols: List[str] = []
+            numeric_fill_values: Dict[str, float] = {}
+            prepared = pd.DataFrame(index=cov_df.index)
+
+            for col in available_cols:
+                series = cov_df[col]
+                numeric_series = pd.to_numeric(series, errors='coerce')
+                numeric_ratio = float(numeric_series.notna().mean()) if len(numeric_series) > 0 else 0.0
+
+                if numeric_ratio > 0.9:
+                    numeric_cols.append(col)
+                    fill_value = float(numeric_series.mean()) if numeric_series.notna().any() else 0.0
+                    if not np.isfinite(fill_value):
+                        fill_value = 0.0
+                    numeric_fill_values[col] = fill_value
+                    prepared[col] = numeric_series.fillna(fill_value).astype(float)
+                else:
+                    categorical_cols.append(col)
+                    prepared[col] = series.astype(str).replace({'nan': missing_token, 'None': missing_token, '<NA>': missing_token}).fillna(missing_token)
+
+            encoded = pd.get_dummies(
+                prepared[numeric_cols + categorical_cols],
+                columns=categorical_cols,
+                drop_first=True,
+                dtype=float,
+            )
+
+            fit_state = {
+                'numeric_cols': numeric_cols,
+                'categorical_cols': categorical_cols,
+                'numeric_fill_values': numeric_fill_values,
+                'columns': encoded.columns.tolist(),
+            }
+            return encoded, fit_state
+
+        numeric_cols = list(fit_state.get('numeric_cols', []))
+        categorical_cols = list(fit_state.get('categorical_cols', []))
+        numeric_fill_values = dict(fit_state.get('numeric_fill_values', {}))
+        ordered_cols = list(fit_state.get('columns', []))
+
+        prepared = pd.DataFrame(index=cov_df.index)
+        for col in numeric_cols:
+            if col in cov_df.columns:
+                series = pd.to_numeric(cov_df[col], errors='coerce')
+            else:
+                series = pd.Series(np.nan, index=cov_df.index)
+            prepared[col] = series.fillna(float(numeric_fill_values.get(col, 0.0))).astype(float)
+
+        for col in categorical_cols:
+            if col in cov_df.columns:
+                series = cov_df[col]
+            else:
+                series = pd.Series(missing_token, index=cov_df.index)
+            prepared[col] = series.astype(str).replace({'nan': missing_token, 'None': missing_token, '<NA>': missing_token}).fillna(missing_token)
+
+        encoded = pd.get_dummies(
+            prepared[numeric_cols + categorical_cols],
+            columns=categorical_cols,
+            drop_first=True,
+            dtype=float,
+        )
+        if ordered_cols:
+            encoded = encoded.reindex(columns=ordered_cols, fill_value=0.0)
+        return encoded, fit_state
+
+    @staticmethod
+    def _residualize_feature_matrix(X_matrix: np.ndarray, design_matrix: Optional[pd.DataFrame]) -> np.ndarray:
+        """Remove covariate effects from each feature using least-squares residualization."""
+        if design_matrix is None or design_matrix.empty:
+            return X_matrix
+
+        design_values = np.asarray(design_matrix, dtype=float)
+        design_with_intercept = np.column_stack([
+            np.ones((design_values.shape[0], 1), dtype=float),
+            design_values,
+        ])
+
+        if design_with_intercept.shape[0] <= design_with_intercept.shape[1]:
+            return X_matrix
+
+        try:
+            coefficients, _, _, _ = np.linalg.lstsq(design_with_intercept, X_matrix, rcond=None)
+            return X_matrix - design_with_intercept @ coefficients
+        except Exception:
+            return X_matrix
     
     def prepare_data(self, test_size: float = 0.3, scaling_method: str = 'standard',
-                    random_state: int = 42, imputation_method: str = 'mean') -> Tuple[np.ndarray, np.ndarray,
+                    random_state: int = 42, imputation_method: str = 'mean',
+                    return_indices: bool = False) -> Tuple[np.ndarray, np.ndarray,
                                                       np.ndarray, np.ndarray]:
         """
         Prepare data for ML: transpose, split, and scale.
@@ -177,19 +286,29 @@ class MetabolomicsMLAnalysis:
             X[inds] = np.take(col_means, inds[1])
         
         # Train-test split (or use all data if test_size is 0 or None)
+        sample_indices = np.arange(len(self.feature_columns))
         if test_size is None or test_size == 0.0 or test_size == 0:
             # No split - use all data for training (for PCA, LDA, etc.)
-            X_train = X
+            train_indices = sample_indices
+            test_indices = np.array([], dtype=int)
+            X_train = X[train_indices]
             X_test = np.empty((0, X.shape[1]))
-            y_train = y
+            y_train = y[train_indices]
             y_test = np.array([])
             logger.info(f"Using all {len(X_train)} samples (no train-test split)")
         else:
             # Train-test split with stratification
             try:
-                X_train, X_test, y_train, y_test = train_test_split(
-                    X, y, test_size=test_size, stratify=y, random_state=random_state
+                train_indices, test_indices = train_test_split(
+                    sample_indices,
+                    test_size=test_size,
+                    stratify=y,
+                    random_state=random_state,
                 )
+                X_train = X[train_indices]
+                X_test = X[test_indices]
+                y_train = y[train_indices]
+                y_test = y[test_indices]
                 logger.info(f"Split data: {len(X_train)} train, {len(X_test)} test samples")
             except ValueError as e:
                 # Fail fast instead of silently using a potentially biased random split.
@@ -217,6 +336,9 @@ class MetabolomicsMLAnalysis:
             X_train = self.scaler.fit_transform(X_train)
             if X_test.size > 0:
                 X_test = self.scaler.transform(X_test)
+
+        if return_indices:
+            return X_train, X_test, y_train, y_test, train_indices, test_indices
         
         return X_train, X_test, y_train, y_test
 
@@ -481,11 +603,12 @@ class MetabolomicsMLAnalysis:
 
         for run_idx in range(repeated_runs):
             run_seed = random_state + run_idx
-            X_train, X_test, y_train, y_test = self.prepare_data(
+            X_train, X_test, y_train, y_test, train_idx, test_idx = self.prepare_data(
                 test_size=test_size,
                 scaling_method='none',  # Pipeline handles scaling.
                 random_state=run_seed,
                 imputation_method='none',
+                return_indices=True,
             )
 
             # Optional imputation (reuse existing Statistics implementation).
@@ -523,6 +646,22 @@ class MetabolomicsMLAnalysis:
                 col_means = np.nanmean(X_train, axis=0)
                 inds = np.where(np.isnan(X_test))
                 X_test[inds] = np.take(col_means, inds[1])
+
+            covariate_adjustment_applied = False
+            if self.covariate_data is not None and self.covariate_cols:
+                sample_names = list(self.feature_columns)
+                train_samples = [sample_names[i] for i in train_idx]
+                test_samples = [sample_names[i] for i in test_idx] if len(test_idx) > 0 else []
+                train_design, fit_state = self._build_covariate_design_matrix(train_samples)
+                test_design = None
+                if test_samples:
+                    test_design, _ = self._build_covariate_design_matrix(test_samples, fit_state=fit_state)
+
+                if train_design is not None and not train_design.empty:
+                    X_train = self._residualize_feature_matrix(X_train, train_design)
+                    if len(X_test) > 0 and test_design is not None and not test_design.empty:
+                        X_test = self._residualize_feature_matrix(X_test, test_design)
+                    covariate_adjustment_applied = True
 
             # Explicit check: ensure each class appears in test set (when using holdout).
             if len(X_test) > 0:
@@ -784,6 +923,15 @@ class MetabolomicsMLAnalysis:
             nested_cv_summary = None
             if nested_cv and tune_hyperparameters and not hyperparameters:
                 try:
+                    X_full_nested = X_full
+                    nested_covariate_adjustment_applied = False
+                    if self.covariate_data is not None and self.covariate_cols:
+                        full_samples = list(self.feature_columns)
+                        full_design, full_fit_state = self._build_covariate_design_matrix(full_samples)
+                        if full_design is not None and not full_design.empty:
+                            X_full_nested = self._residualize_feature_matrix(X_full, full_design)
+                            nested_covariate_adjustment_applied = True
+
                     search_space_nested = self._build_search_space(model_name, regularization_type)
                     if search_space_nested:
                         base_estimator_nested, _ = self._build_estimator(
@@ -838,7 +986,7 @@ class MetabolomicsMLAnalysis:
 
                         nested_scores = cross_validate(
                             estimator=nested_search,
-                            X=X_full,
+                            X=X_full_nested,
                             y=y_full,
                             cv=outer_cv,
                             scoring=scoring,
@@ -854,6 +1002,7 @@ class MetabolomicsMLAnalysis:
                                     'mean': float(np.mean(vals)),
                                     'std': float(np.std(vals, ddof=1)) if vals.size > 1 else 0.0,
                                 }
+                        nested_cv_summary['covariate_adjustment_applied'] = nested_covariate_adjustment_applied
                 except Exception as e:
                     nested_cv_summary = {'error': str(e)}
 
@@ -1054,6 +1203,8 @@ class MetabolomicsMLAnalysis:
             'n_features_after_selection': best_run.get('n_features_after_selection', best_run.get('n_features')),
             'overfitting_warning': any(bool(rr.get('overfitting_flag')) for rr in run_results),
             'overfitting_gap_mean': float(np.mean([rr['overfitting_gap'] for rr in run_results if rr.get('overfitting_gap') is not None])) if any(rr.get('overfitting_gap') is not None for rr in run_results) else None,
+            'covariate_adjustment_applied': covariate_adjustment_applied,
+            'covariate_columns': list(self.covariate_cols),
         })
 
         logger.info(
@@ -1173,12 +1324,31 @@ class MetabolomicsMLAnalysis:
             logger.info(f"Multi-model run {run_idx + 1}/{repeated_runs} with seed={run_seed}...")
             run_start = time.perf_counter()
 
-            X_train, X_test, y_train, y_test = self.prepare_data(test_size, scaling_method, run_seed)
+            X_train, X_test, y_train, y_test, train_idx, test_idx = self.prepare_data(
+                test_size,
+                scaling_method,
+                run_seed,
+                return_indices=True,
+            )
             if class_labels is None:
                 class_labels = self.label_encoder.classes_
 
             if len(X_test) == 0:
                 raise ValueError("No test samples available. Cannot perform multi-model comparison.")
+
+            if self.covariate_data is not None and self.covariate_cols:
+                sample_names = list(self.feature_columns)
+                train_samples = [sample_names[i] for i in train_idx]
+                test_samples = [sample_names[i] for i in test_idx] if len(test_idx) > 0 else []
+                train_design, fit_state = self._build_covariate_design_matrix(train_samples)
+                test_design = None
+                if test_samples:
+                    test_design, _ = self._build_covariate_design_matrix(test_samples, fit_state=fit_state)
+
+                if train_design is not None and not train_design.empty:
+                    X_train = self._residualize_feature_matrix(X_train, train_design)
+                    if len(X_test) > 0 and test_design is not None and not test_design.empty:
+                        X_test = self._residualize_feature_matrix(X_test, test_design)
 
             run_model_results = {}
             for model_name in model_names:

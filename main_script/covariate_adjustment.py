@@ -464,35 +464,44 @@ def run_covariate_adjusted_analysis(
             result_row[sample] = row[sample]
         
         # PRE-FILTER: Check if each pairwise comparison has sufficient valid data
-        # Valid means: non-zero, non-NaN values per group
+        # If min_samples_type is None (imputation mode), skip filtering (already done in imputation step)
         skip_metabolite = False
         group_valid_counts = {}
         
-        for group in unique_groups:
-            group_samples = [s for s in sample_cols if group_map.get(s) == group]
-            # Count only valid (non-zero, non-NaN) values
-            valid_values = [row[s] for s in group_samples 
-                           if pd.notna(row[s]) and row[s] != 0]
-            group_valid_counts[group] = len(valid_values)
-        
-        # Check each pairwise comparison using user-defined threshold
-        for g1, g2 in pairwise_combos:
-            # Calculate required minimum samples for each group
-            g1_samples = [s for s in sample_cols if group_map.get(s) == g1]
-            g2_samples = [s for s in sample_cols if group_map.get(s) == g2]
+        if min_samples_type is not None and min_samples_per_group is not None:
+            # Standard filtering mode: apply min_samples thresholds
+            for group in unique_groups:
+                group_samples = [s for s in sample_cols if group_map.get(s) == group]
+                # Count only valid (non-zero, non-NaN) values
+                valid_values = [row[s] for s in group_samples 
+                               if pd.notna(row[s]) and row[s] != 0]
+                group_valid_counts[group] = len(valid_values)
             
-            if min_samples_type == 'percentage':
-                # Percentage-based threshold
-                g1_min_required = max(1, int(np.ceil(len(g1_samples) * min_samples_per_group / 100.0)))
-                g2_min_required = max(1, int(np.ceil(len(g2_samples) * min_samples_per_group / 100.0)))
-            else:
-                # Absolute count threshold
-                g1_min_required = min_samples_per_group
-                g2_min_required = min_samples_per_group
-            
-            if group_valid_counts.get(g1, 0) < g1_min_required or group_valid_counts.get(g2, 0) < g2_min_required:
-                skip_metabolite = True
-                break
+            # Check each pairwise comparison using user-defined threshold
+            for g1, g2 in pairwise_combos:
+                # Calculate required minimum samples for each group
+                g1_samples = [s for s in sample_cols if group_map.get(s) == g1]
+                g2_samples = [s for s in sample_cols if group_map.get(s) == g2]
+                
+                if min_samples_type == 'percentage':
+                    # Percentage-based threshold
+                    g1_min_required = max(1, int(np.ceil(len(g1_samples) * min_samples_per_group / 100.0)))
+                    g2_min_required = max(1, int(np.ceil(len(g2_samples) * min_samples_per_group / 100.0)))
+                else:
+                    # Absolute count threshold
+                    g1_min_required = min_samples_per_group
+                    g2_min_required = min_samples_per_group
+                
+                if group_valid_counts.get(g1, 0) < g1_min_required or group_valid_counts.get(g2, 0) < g2_min_required:
+                    skip_metabolite = True
+                    break
+        else:
+            # Imputation mode: filtering already applied, skip here
+            for group in unique_groups:
+                group_samples = [s for s in sample_cols if group_map.get(s) == group]
+                valid_values = [row[s] for s in group_samples 
+                               if pd.notna(row[s]) and row[s] != 0]
+                group_valid_counts[group] = len(valid_values)
         
         # Store actual valid n per group
         for group in unique_groups:
@@ -635,10 +644,15 @@ def run_covariate_adjusted_analysis(
                             # Compute effect manually as g2 - g1
                             model_effect = float(model.params[g2_col] - model.params[g1_col])
                         
-                        # SE for contrast: sqrt(se_g2^2 + se_g1^2) when contrast is [1, -1, 0, ...]
-                        se_g2 = float(model.bse[g2_col])
-                        se_g1 = float(model.bse[g1_col])
-                        model_se = np.sqrt(se_g2**2 + se_g1**2)
+                        # SE for contrast: use t_test object which properly accounts for covariance
+                        # The t_test.sd attribute gives the standard deviation of the contrast
+                        if hasattr(t_test, 'sd'):
+                            model_se = float(np.asarray(t_test.sd).reshape(-1)[0])
+                        else:
+                            # Fallback: approximate SE (ignores covariance, less accurate)
+                            se_g2 = float(model.bse[g2_col])
+                            se_g1 = float(model.bse[g1_col])
+                            model_se = np.sqrt(se_g2**2 + se_g1**2)
                         
                         # Compute CI from effect ± t_crit * SE
                         df_resid = model.df_resid
@@ -664,11 +678,13 @@ def run_covariate_adjusted_analysis(
                         ci_lower = conf_int.loc[g1_col, 0]
                         ci_upper = conf_int.loc[g1_col, 1]
                         
-                        # Model-based: use coefficient and its SE/CI directly
-                        model_effect = float(model.params[g1_col])
+                        # CRITICAL FIX: g1 coefficient represents (μ_g1 - μ_g2) since g2 is reference
+                        # But g1_vs_g2 should represent (μ_g2 - μ_g1), so NEGATE the effect
+                        model_effect = -float(model.params[g1_col])
                         model_se = float(model.bse[g1_col])
-                        model_ci_lower = conf_int.loc[g1_col, 0]
-                        model_ci_upper = conf_int.loc[g1_col, 1]
+                        # Flip CI bounds due to negation of effect
+                        model_ci_lower = -conf_int.loc[g1_col, 1]
+                        model_ci_upper = -conf_int.loc[g1_col, 0]
                         
                     else:
                         # Both are reference (shouldn't happen)
@@ -740,18 +756,28 @@ def run_covariate_adjusted_analysis(
                 covar_cols = [c for c in X_clean.columns if c not in group_cols and c != 'const']
                 residuals = y_clean - model.predict(X_clean)
                 
-                # Add back group-specific means
+                # CRITICAL FIX: Correct indexing for group effects
+                # group_effect[valid_mask][i] creates a copy, so assignment doesn't update original
                 group_effect = np.zeros(len(y_clean))
-                for i, sample in enumerate(sample_cols):
-                    if valid_mask[i]:
-                        group = group_map[sample]
-                        # Find corresponding group dummy column
-                        group_col = f'{group_var_name}_{group}'
-                        if group_col in model.params.index:
-                            group_effect[valid_mask][i] = model.params[group_col]
+                valid_indices = np.where(valid_mask)[0]  # Get indices where valid_mask is True
+                
+                for j, i in enumerate(valid_indices):
+                    # j: index in the valid subset (y_clean, residuals, group_effect)
+                    # i: index in original sample_cols
+                    sample = sample_cols[i]
+                    group = group_map[sample]
+                    # Find corresponding group dummy column
+                    group_col = f'{group_var_name}_{group}'
+                    if group_col in model.params.index:
+                        # j indexes position in valid arrays (group_effect, residuals)
+                        group_effect[j] = model.params[group_col]
                 
                 adjusted_vals = residuals + group_effect + model.params['const']
-                adjusted_intensities_dict[metabolite_id] = adjusted_vals
+
+                # Re-expand to the original sample order so the output always matches sample_cols.
+                adjusted_full = np.full(len(sample_cols), np.nan, dtype=float)
+                adjusted_full[valid_mask] = adjusted_vals
+                adjusted_intensities_dict[metabolite_id] = adjusted_full
                 
         except Exception as e:
             # Model fitting failed
@@ -1164,28 +1190,41 @@ def run_limma_covariate_analysis(
         
         # Check valid data per group
         group_valid_counts = {}
-        for group in unique_groups:
-            group_samples = [s for s in sample_cols if group_map.get(s) == group]
-            valid_values = [row[s] for s in group_samples 
-                          if pd.notna(row[s]) and row[s] != 0]
-            group_valid_counts[group] = len(valid_values)
-        
-        # Check minimum samples threshold
         skip_metabolite = False
-        for g1, g2 in pairwise_combos:
-            g1_samples = [s for s in sample_cols if group_map.get(s) == g1]
-            g2_samples = [s for s in sample_cols if group_map.get(s) == g2]
+        
+        if min_samples_type is not None and min_samples_per_group is not None:
+            # Standard filtering mode: apply min_samples thresholds
+            for group in unique_groups:
+                group_samples = [s for s in sample_cols if group_map.get(s) == group]
+                valid_values = [row[s] for s in group_samples 
+                              if pd.notna(row[s]) and row[s] != 0]
+                group_valid_counts[group] = len(valid_values)
             
-            if min_samples_type == 'percentage':
-                g1_min_required = max(1, int(np.ceil(len(g1_samples) * min_samples_per_group / 100.0)))
-                g2_min_required = max(1, int(np.ceil(len(g2_samples) * min_samples_per_group / 100.0)))
-            else:
-                g1_min_required = min_samples_per_group
-                g2_min_required = min_samples_per_group
-            
-            if group_valid_counts.get(g1, 0) < g1_min_required or group_valid_counts.get(g2, 0) < g2_min_required:
-                skip_metabolite = True
-                break
+            # Check minimum samples threshold
+            for g1, g2 in pairwise_combos:
+                g1_samples = [s for s in sample_cols if group_map.get(s) == g1]
+                g2_samples = [s for s in sample_cols if group_map.get(s) == g2]
+                
+                if min_samples_type == 'percentage':
+                    g1_min_required = max(1, int(np.ceil(len(g1_samples) * min_samples_per_group / 100.0)))
+                    g2_min_required = max(1, int(np.ceil(len(g2_samples) * min_samples_per_group / 100.0)))
+                else:
+                    g1_min_required = min_samples_per_group
+                    g2_min_required = min_samples_per_group
+                
+                if group_valid_counts.get(g1, 0) < g1_min_required or group_valid_counts.get(g2, 0) < g2_min_required:
+                    skip_metabolite = True
+                    break
+        else:
+            # Imputation mode: filtering already applied, skip here
+            for group in unique_groups:
+                group_samples = [s for s in sample_cols if group_map.get(s) == group]
+                valid_values = [row[s] for s in group_samples 
+                              if pd.notna(row[s]) and row[s] != 0]
+                group_valid_counts[group] = len(valid_values)
+            # Do not skip here: in imputation mode the pre-filter already enforced
+            # minimum valid data, so rows should proceed to model fitting.
+            skip_metabolite = False
         
         # Store n per group
         for group in unique_groups:
