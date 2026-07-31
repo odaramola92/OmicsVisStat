@@ -139,13 +139,17 @@ This project is licensed under the MIT License.
 
 ## Version History
 
-### Version 1.0.0
+### Version 1.0.1
+- Fixed minor bugs and improved overall stability.
+- Improved workflow performance.
+- Updated documentation.
+
+### Version 1.0.1
 - Initial public release
 - Statistics workflows
 - Machine learning workflows
 - Visualization workflows
 - Utility sub-tools
-
 ---
 
 Always validate results with domain knowledge and your study design.
