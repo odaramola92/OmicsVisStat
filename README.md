@@ -1,6 +1,6 @@
 # OmicsVisStat
 
-OmicsVisStat: Statistical and Visualization Platform for Omics Data Analysis.
+OmicsVisStat: Statistical Analysis and Visualization Platform for Omics Data Analysis.
 
 ## Overview
 
